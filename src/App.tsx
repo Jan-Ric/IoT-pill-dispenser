@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { Home, History, Info, User, X } from "lucide-react";
-import Dashboard from "./components/Dashboard.tsx";
-import HistoryComponent from "./components/History.tsx";
-import About from "./components/About.tsx";
-import Account from "./components/Account.tsx";
+import Dashboard from "./components/Dashboard";
+import HistoryComponent from "./components/History";
+import About from "./components/About";
+import Account from "./components/Account";
 
 type Page = "dashboard" | "history" | "about" | "account";
 
