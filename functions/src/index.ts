@@ -2,14 +2,13 @@ import {onSchedule} from "firebase-functions/v2/scheduler";
 import {onValueUpdated} from "firebase-functions/v2/database";
 import * as admin from "firebase-admin";
 import sgMail from "@sendgrid/mail";
-import {defineString} from "firebase-functions/params";
 
 admin.initializeApp();
 
-// Define environment parameters
-const sendgridKey = defineString("SENDGRID_KEY");
-const caregiverEmail = defineString("CAREGIVER_EMAIL");
-const fromEmail = defineString("FROM_EMAIL");
+// Get environment variables
+const SENDGRID_KEY = process.env.SENDGRID_KEY || "";
+const CAREGIVER_EMAIL = process.env.CAREGIVER_EMAIL || "";
+const FROM_EMAIL = "sean.vidanes22@gmail.com";
 
 // Medicine names mapping
 const medicineNames: { [key: string]: string } = {
@@ -17,6 +16,28 @@ const medicineNames: { [key: string]: string } = {
   "2": "Vitamin C",
   "3": "Blood Pressure Medication",
 };
+
+// Medicine scheduled times
+const medicineScheduledTimes: { [key: string]: string } = {
+  "1": "08:00",
+  "2": "12:00",
+  "3": "20:00",
+};
+
+// ✅ NEW: Helper function to format date properly
+function formatDate(dateString: string | undefined): string {
+  if (!dateString || dateString === "0000-00-00" || dateString === "") {
+    // If no date provided, use current date
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  
+  // Return the date as-is if it's already in correct format
+  return dateString;
+}
 
 // Email Templates
 function getMedicineTakenEmailHTML(
@@ -220,7 +241,7 @@ function getMissedMedicineEmailHTML(
 }
 
 function getDailySummaryEmailHTML(
-  summaryData: Array<{name: string; time: string; status: string}>,
+  summaryData: Array<{name: string; time: string; status: string; date: string}>,
   date: string
 ): string {
   const rows = summaryData.map((item) => {
@@ -348,18 +369,32 @@ export const onMedicineUpdate = onValueUpdated(
 
     // Prevent duplicate emails
     if (JSON.stringify(newData) === JSON.stringify(oldData)) {
+      console.log("No changes detected, skipping email");
+      return null;
+    }
+
+    // Check if environment variables are set
+    if (!SENDGRID_KEY || !CAREGIVER_EMAIL) {
+      console.error("Missing environment variables:", {
+        hasSendGridKey: !!SENDGRID_KEY,
+        hasCaregiverEmail: !!CAREGIVER_EMAIL,
+        fromEmail: FROM_EMAIL,
+      });
       return null;
     }
 
     // Initialize SendGrid with the API key
-    sgMail.setApiKey(sendgridKey.value());
+    sgMail.setApiKey(SENDGRID_KEY);
 
     const medicineId = newData.medicineId;
     const medicineName = medicineNames[medicineId] || `Medicine ${medicineId}`;
     const status = newData.status;
     const taken = newData.medicine_taken;
     const time = newData.time;
-    const date = newData.date;
+    
+    // ✅ FIX: Properly format the date, fallback to current date if invalid
+    const rawDate = newData.date;
+    const formattedDate = formatDate(rawDate);
 
     console.log("Medicine update detected:", {
       medicineId,
@@ -367,39 +402,54 @@ export const onMedicineUpdate = onValueUpdated(
       status,
       taken,
       time,
-      date,
+      rawDate,
+      formattedDate,
     });
 
     try {
-      // Send email for "taken" status
-      if (status === "taken" && taken === true) {
+      // Use scheduled time for consistency
+      const scheduledTime = medicineScheduledTimes[medicineId] || time;
+
+      // Send email for "dispensed" status (medicine taken)
+      if (status === "dispensed" && taken === true) {
         const msg = {
-          to: caregiverEmail.value(),
-          from: fromEmail.value(),
+          to: CAREGIVER_EMAIL,
+          from: FROM_EMAIL,
           subject: `Medicine Taken: ${medicineName}`,
-          html: getMedicineTakenEmailHTML(medicineName, time, date),
+          html: getMedicineTakenEmailHTML(medicineName, scheduledTime, formattedDate),
         };
 
         await sgMail.send(msg);
-        console.log(`Medicine taken email sent for ${medicineName}`);
+        console.log(`✅ Medicine taken email sent for ${medicineName} on ${formattedDate}`);
       }
 
       // Send email for "alert" status (not taken)
       if (status === "alert" && taken === false) {
         const msg = {
-          to: caregiverEmail.value(),
-          from: fromEmail.value(),
+          to: CAREGIVER_EMAIL,
+          from: FROM_EMAIL,
           subject: `ALERT: Missed Medicine - ${medicineName}`,
-          html: getMissedMedicineEmailHTML(medicineName, time, date),
+          html: getMissedMedicineEmailHTML(medicineName, scheduledTime, formattedDate),
         };
 
         await sgMail.send(msg);
-        console.log(`Missed medicine alert email sent for ${medicineName}`);
+        console.log(`✅ Missed medicine alert email sent for ${medicineName} on ${formattedDate}`);
       }
 
       return null;
     } catch (error) {
-      console.error("Error sending email:", error);
+      console.error("❌ Error sending email:", error);
+      if (error instanceof Error) {
+        console.error("Error message:", error.message);
+      }
+      // Log SendGrid specific error details
+      if (error && typeof error === 'object' && 'response' in error) {
+        const sgError = error as any;
+        console.error("SendGrid error details:", {
+          statusCode: sgError.code,
+          body: sgError.response?.body,
+        });
+      }
       return null;
     }
   }
@@ -414,8 +464,14 @@ export const sendDailySummary = onSchedule(
   },
   async () => {
     try {
+      // Check if environment variables are set
+      if (!SENDGRID_KEY || !CAREGIVER_EMAIL) {
+        console.error("Missing environment variables for daily summary");
+        return;
+      }
+
       // Initialize SendGrid with the API key
-      sgMail.setApiKey(sendgridKey.value());
+      sgMail.setApiKey(SENDGRID_KEY);
 
       // Get today's date
       const today = new Date();
@@ -437,42 +493,60 @@ export const sendDailySummary = onSchedule(
           name: "Aspirin",
           time: "08:00",
           status: "PENDING",
+          date: dateString,
         },
         {
           name: "Vitamin C",
           time: "12:00",
           status: "PENDING",
+          date: dateString,
         },
         {
           name: "Blood Pressure Medication",
           time: "20:00",
           status: "PENDING",
+          date: dateString,
         },
       ];
 
-      // Update status based on history
+      // ✅ FIX: Update status and date based on history
       if (historyData) {
         Object.values(historyData).forEach((record: any) => {
           const medIndex = parseInt(record.medicineId) - 1;
           if (medIndex >= 0 && medIndex < 3) {
             summaryData[medIndex].status =
               record.medicine_taken === true ? "TAKEN" : "NOT TAKEN";
+            // Update the date from the actual record
+            if (record.date) {
+              summaryData[medIndex].date = formatDate(record.date);
+            }
           }
         });
       }
 
       // Send daily summary email
       const msg = {
-        to: caregiverEmail.value(),
-        from: fromEmail.value(),
+        to: CAREGIVER_EMAIL,
+        from: FROM_EMAIL,
         subject: `Daily Medication Summary - ${dateString}`,
         html: getDailySummaryEmailHTML(summaryData, dateString),
       };
 
       await sgMail.send(msg);
-      console.log("Daily summary email sent successfully");
+      console.log("✅ Daily summary email sent successfully");
     } catch (error) {
-      console.error("Error sending daily summary:", error);
+      console.error("❌ Error sending daily summary:", error);
+      if (error instanceof Error) {
+        console.error("Error details:", error.message);
+      }
+      // Log SendGrid specific error details
+      if (error && typeof error === 'object' && 'response' in error) {
+        const sgError = error as any;
+        console.error("SendGrid error details:", {
+          statusCode: sgError.code,
+          body: sgError.response?.body,
+        });
+      }
     }
   }
 );

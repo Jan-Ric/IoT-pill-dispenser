@@ -357,7 +357,7 @@ function Dashboard() {
     }
   };
 
-  const handleManualToggle = (id: string) => {
+  const handleManualToggle = async (id: string) => {
     const medicine = medicines.find((m) => m.id === id);
     if (!medicine) return;
 
@@ -372,30 +372,49 @@ function Dashboard() {
     let newStatus: string;
     let updated: MedicineSchedule[];
 
+    // If medicine hasn't been dispensed yet, send command to Arduino
     if (!medicine.dispensed && !medicine.taken) {
-      newStatus = "dispensed";
-      updated = medicines.map((med) =>
-        med.id === id
-          ? {
-              ...med,
-              dispensed: true,
-              taken: false,
-              alert: false,
-              takenAt: undefined,
-              takenDate: undefined,
-              alertTime: undefined,
-            }
-          : med
-      );
+      try {
+        // Send dispense command to Firebase for Arduino to read
+        const response = await fetch(
+          "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app/dispense_command.json",
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              medicineId: id,
+              timestamp: timestamp,
+            }),
+          }
+        );
 
-      addAlert(
-        "dispensed",
-        `${medicine.name} dispensed at ${currentTime.substring(0, 5)}`
-      );
-      setNotification(`💊 ${medicine.name} dispensed - monitoring started`);
-      setNotificationType("success");
-      setTimeout(() => setNotification(""), 3000);
-    } else if (medicine.dispensed && !medicine.taken) {
+        if (response.ok) {
+          setNotification(`💊 Dispense command sent for ${medicine.name}...`);
+          setNotificationType("success");
+          setTimeout(() => setNotification(""), 3000);
+
+          // Arduino will handle the actual dispensing and update Firebase
+          // The status will be updated automatically via Firebase listener
+          return;
+        } else {
+          setNotification(`❌ Failed to send dispense command`);
+          setNotificationType("error");
+          setTimeout(() => setNotification(""), 3000);
+          return;
+        }
+      } catch (error) {
+        console.error("Error sending dispense command:", error);
+        setNotification(`❌ Error sending dispense command`);
+        setNotificationType("error");
+        setTimeout(() => setNotification(""), 3000);
+        return;
+      }
+    }
+
+    // Rest of the function remains the same for manual marking
+    else if (medicine.dispensed && !medicine.taken) {
       newStatus = "taken";
       updated = medicines.map((med) =>
         med.id === id
