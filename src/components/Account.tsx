@@ -17,7 +17,22 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { firebaseService } from "../services/firebaseService";
-import { Medicine, Schedule } from "../types";
+
+interface Schedule {
+  id: string;
+  time: string;
+  dispensed: boolean;
+  taken: boolean;
+  alert: boolean;
+}
+
+interface Medicine {
+  id: string;
+  name: string;
+  dosage: string;
+  servoIndex: number;
+  schedules: Schedule[];
+}
 
 interface UserProfile {
   fullName: string;
@@ -58,21 +73,28 @@ function Account() {
   const [tempMedicine, setTempMedicine] = useState<Medicine | null>(null);
   const [scheduleNotification, setScheduleNotification] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Load medicines from Firebase
   useEffect(() => {
     const loadMedicines = async () => {
       try {
+        setIsLoading(true);
         const data = await firebaseService.getMedicines();
-        setMedicines(data);
+        console.log("Loaded medicines:", data);
+        setMedicines(data || { slot_0: null, slot_1: null, slot_2: null });
       } catch (error) {
         console.error("Error loading medicines from Firebase:", error);
+        setMedicines({ slot_0: null, slot_1: null, slot_2: null });
+      } finally {
+        setIsLoading(false);
       }
     };
     loadMedicines();
 
     const unsubscribe = firebaseService.onMedicinesChange((data: any) => {
-      setMedicines(data);
+      console.log("Medicines changed:", data);
+      setMedicines(data || { slot_0: null, slot_1: null, slot_2: null });
     });
 
     return () => unsubscribe();
@@ -101,11 +123,16 @@ function Account() {
     });
   };
 
-  // Medicine Management
   const getAvailableSlot = (): string | null => {
-    if (medicines.slot_0 === null) return "slot_0";
-    if (medicines.slot_1 === null) return "slot_1";
-    if (medicines.slot_2 === null) return "slot_2";
+    console.log("Checking available slots:", medicines);
+
+    if (medicines.slot_0 === null || medicines.slot_0 === undefined)
+      return "slot_0";
+    if (medicines.slot_1 === null || medicines.slot_1 === undefined)
+      return "slot_1";
+    if (medicines.slot_2 === null || medicines.slot_2 === undefined)
+      return "slot_2";
+
     return null;
   };
 
@@ -116,7 +143,13 @@ function Account() {
   };
 
   const addNewMedicine = () => {
+    console.log("Add medicine clicked");
+    console.log("Current medicines:", medicines);
+    console.log("Current editing slot:", editingSlot);
+
     const availableSlot = getAvailableSlot();
+    console.log("Available slot:", availableSlot);
+
     if (!availableSlot) {
       setScheduleNotification(
         "⚠️ Maximum 3 medicines allowed (hardware limit)"
@@ -141,6 +174,7 @@ function Account() {
       ],
     };
 
+    console.log("Setting temp medicine:", newMedicine);
     setTempMedicine(newMedicine);
     setEditingSlot(availableSlot);
   };
@@ -148,6 +182,7 @@ function Account() {
   const editMedicine = (slotId: string) => {
     const medicine = medicines[slotId];
     if (medicine) {
+      console.log("Editing medicine:", medicine);
       setTempMedicine({ ...medicine });
       setEditingSlot(slotId);
     }
@@ -199,17 +234,44 @@ function Account() {
         schedules: tempMedicine.schedules.filter((s) => s.id !== scheduleId),
       });
     } else {
-      alert("Medicine must have at least one schedule!");
+      setScheduleNotification("⚠️ Medicine must have at least one schedule!");
+      setTimeout(() => setScheduleNotification(""), 3000);
     }
   };
 
   const saveMedicine = async () => {
-    if (!tempMedicine || !editingSlot) return;
+    if (!tempMedicine || !editingSlot) {
+      console.error("No medicine to save");
+      return;
+    }
 
     try {
-      await firebaseService.saveMedicine(editingSlot, tempMedicine);
+      console.log("Saving medicine:", editingSlot, tempMedicine);
+
+      // Reset all schedule statuses to default when saving
+      const medicineToSave = {
+        ...tempMedicine,
+        schedules: tempMedicine.schedules.map((s) => ({
+          ...s,
+          dispensed: false,
+          taken: false,
+          alert: false,
+        })),
+      };
+
+      // Update local state immediately for responsive UI
+      setMedicines((prev) => ({
+        ...prev,
+        [editingSlot]: medicineToSave,
+      }));
+
+      // Save to Firebase
+      await firebaseService.saveMedicine(editingSlot, medicineToSave);
+
       setScheduleNotification("✓ Medicine saved successfully!");
       setTimeout(() => setScheduleNotification(""), 3000);
+
+      // Clear editing state
       setEditingSlot(null);
       setTempMedicine(null);
     } catch (error) {
@@ -220,20 +282,48 @@ function Account() {
   };
 
   const deleteMedicine = async (slotId: string) => {
-    if (confirm("Are you sure you want to delete this medicine?")) {
-      try {
-        await firebaseService.deleteMedicine(slotId);
-        setScheduleNotification("✓ Medicine deleted successfully!");
-        setTimeout(() => setScheduleNotification(""), 3000);
-      } catch (error) {
-        console.error("Error deleting medicine:", error);
-        setScheduleNotification("❌ Error deleting medicine");
-        setTimeout(() => setScheduleNotification(""), 3000);
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this medicine? This action cannot be undone."
+    );
+
+    if (!confirmed) {
+      console.log("Delete cancelled");
+      return;
+    }
+
+    try {
+      console.log("Deleting medicine:", slotId);
+
+      // Update local state immediately
+      setMedicines((prev) => ({
+        ...prev,
+        [slotId]: null,
+      }));
+
+      // Delete from Firebase
+      await firebaseService.deleteMedicine(slotId);
+
+      setScheduleNotification("✓ Medicine deleted successfully!");
+      setTimeout(() => setScheduleNotification(""), 3000);
+
+      // If we were editing this medicine, clear the editing state
+      if (editingSlot === slotId) {
+        setEditingSlot(null);
+        setTempMedicine(null);
       }
+    } catch (error) {
+      console.error("Error deleting medicine:", error);
+      setScheduleNotification("❌ Error deleting medicine");
+      setTimeout(() => setScheduleNotification(""), 3000);
+
+      // Reload medicines on error
+      const data = await firebaseService.getMedicines();
+      setMedicines(data);
     }
   };
 
   const cancelMedicineEdit = () => {
+    console.log("Canceling edit");
     setEditingSlot(null);
     setTempMedicine(null);
   };
@@ -258,7 +348,11 @@ function Account() {
   };
 
   const restartDevice = async () => {
-    if (confirm("Are you sure you want to restart the Arduino device?")) {
+    const confirmed = window.confirm(
+      "Are you sure you want to restart the Arduino device?"
+    );
+
+    if (confirmed) {
       setScheduleNotification("🔄 Restart command sent to device!");
       setTimeout(() => setScheduleNotification(""), 3000);
     }
@@ -274,8 +368,20 @@ function Account() {
   };
 
   const getUsedSlots = () => {
-    return Object.values(medicines).filter((m) => m !== null).length;
+    return Object.values(medicines).filter((m) => m !== null && m !== undefined)
+      .length;
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-teal-50 to-purple-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="w-12 h-12 text-teal-500 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600 font-medium">Loading medicines...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 to-purple-50 p-6">
@@ -553,7 +659,7 @@ function Account() {
           </div>
         </div>
 
-        {/* Medicine Schedule Editor - FIXED SECTION */}
+        {/* Medicine Schedule Editor */}
         <div className="bg-white rounded-3xl shadow-sm p-6 border border-gray-100">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-3">
@@ -599,7 +705,7 @@ function Account() {
               const medicine = medicines[slotId as keyof typeof medicines];
               const isEditing = editingSlot === slotId;
 
-              // EDITING MODE - Show editing form
+              // EDITING MODE
               if (isEditing && tempMedicine) {
                 return (
                   <div
@@ -713,7 +819,7 @@ function Account() {
                 );
               }
 
-              // DISPLAY MODE - Show saved medicine
+              // DISPLAY MODE
               if (medicine && !isEditing) {
                 return (
                   <div
@@ -758,7 +864,7 @@ function Account() {
                 );
               }
 
-              // EMPTY SLOT - Only show if not editing
+              // EMPTY SLOT
               if (!medicine && !isEditing) {
                 return (
                   <div
