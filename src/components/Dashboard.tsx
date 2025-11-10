@@ -3,27 +3,17 @@ import {
   Pill,
   Clock,
   CheckCircle,
-  XCircle,
   Bell,
   AlertTriangle,
   WifiOff,
+  RefreshCw,
 } from "lucide-react";
+import { firebaseService } from "../services/firebaseService";
+import type { Medicine, Schedule } from "../types";
 
-interface MedicineSchedule {
-  id: string;
-  name: string;
-  dosage: string;
-  time: string;
-  taken: boolean;
-  dispensed: boolean;
-  alert: boolean;
-  takenAt?: string;
-  takenDate?: string;
-  alertTime?: string;
-}
-
-interface FirebaseData {
+interface FirebaseUpdate {
   medicineId?: string;
+  scheduleId?: string;
   medicine_taken?: boolean;
   status?: string;
   date?: string;
@@ -41,7 +31,7 @@ interface Alert {
 }
 
 function Dashboard() {
-  const [medicines, setMedicines] = useState<MedicineSchedule[]>([]);
+  const [medicines, setMedicines] = useState<Medicine[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [notification, setNotification] = useState<string>("");
@@ -49,6 +39,7 @@ function Dashboard() {
     "success" | "warning" | "error"
   >("success");
   const [recentAlerts, setRecentAlerts] = useState<Alert[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const lastProcessedTimestamp = useRef<number>(0);
   const isFirstLoad = useRef<boolean>(true);
@@ -79,7 +70,6 @@ function Dashboard() {
     };
 
     setRecentAlerts((prev) => {
-      // Keep only last 5 alerts
       const updated = [newAlert, ...prev].slice(0, 5);
       localStorage.setItem("recentAlerts", JSON.stringify(updated));
       return updated;
@@ -103,244 +93,175 @@ function Dashboard() {
     }
   }, [isConnected]);
 
-  // Initialize medicines from localStorage on mount
+  // Load medicines from Firebase on mount
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("medicineSchedules");
-      if (stored) {
-        setMedicines(JSON.parse(stored));
-        console.log("Loaded medicines from localStorage:", JSON.parse(stored));
-      } else {
-        const defaultMedicines: MedicineSchedule[] = [
-          {
-            id: "1",
-            name: "Aspirin",
-            dosage: "100mg",
-            time: "08:00",
-            taken: false,
-            dispensed: false,
-            alert: false,
-          },
-          {
-            id: "2",
-            name: "Vitamin C",
-            dosage: "500mg",
-            time: "12:00",
-            taken: false,
-            dispensed: false,
-            alert: false,
-          },
-          {
-            id: "3",
-            name: "Blood Pressure Med",
-            dosage: "50mg",
-            time: "20:00",
-            taken: false,
-            dispensed: false,
-            alert: false,
-          },
-        ];
-        setMedicines(defaultMedicines);
-        localStorage.setItem(
-          "medicineSchedules",
-          JSON.stringify(defaultMedicines)
-        );
-      }
-
-      const storedTimestamp = localStorage.getItem("lastProcessedTimestamp");
-      if (storedTimestamp) {
-        lastProcessedTimestamp.current = parseInt(storedTimestamp, 10);
-      }
-    } catch (error) {
-      console.error("Error loading medicines:", error);
-    }
+    loadMedicines();
   }, []);
 
-  // Firebase listener
+  const loadMedicines = async () => {
+    setIsLoading(true);
+    try {
+      const medicinesData = await firebaseService.getMedicines();
+      const loadedMedicines = Object.values(medicinesData).filter(
+        (m): m is Medicine => m !== null
+      );
+      setMedicines(loadedMedicines);
+      setIsConnected(true);
+      console.log("Loaded medicines from Firebase:", loadedMedicines);
+    } catch (error) {
+      console.error("Error loading medicines:", error);
+      setIsConnected(false);
+      setNotification("❌ Failed to load medicines from Firebase");
+      setNotificationType("error");
+      setTimeout(() => setNotification(""), 3000);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Firebase listener for medicine updates
   useEffect(() => {
     setIsConnected(true);
     let unsubscribe: (() => void) | null = null;
+    let medicinesUnsubscribe: (() => void) | null = null;
 
     try {
-      import("../services/firebaseService")
-        .then((module) => {
-          const firebaseService = module.firebaseService;
+      // Listen to medicines structure changes (add/remove/edit medicines)
+      medicinesUnsubscribe = firebaseService.onMedicinesChange(
+        (medicinesData) => {
+          const meds = Object.values(medicinesData).filter(
+            (m): m is Medicine => m !== null
+          );
+          setMedicines(meds);
+          console.log("Medicines updated:", meds);
+        }
+      );
 
-          unsubscribe = firebaseService.onValue((data: FirebaseData) => {
-            console.log("Firebase update received:", data);
+      // Listen to medicine_updates for real-time status changes (taken/dispensed/alert)
+      unsubscribe = firebaseService.onValue((data: FirebaseUpdate) => {
+        console.log("Firebase update received:", data);
 
-            if (isFirstLoad.current) {
-              console.log("First load - ignoring initial Firebase snapshot");
-              isFirstLoad.current = false;
+        if (isFirstLoad.current) {
+          console.log("First load - ignoring initial Firebase snapshot");
+          isFirstLoad.current = false;
 
-              if (data.timestamp) {
-                lastProcessedTimestamp.current = data.timestamp;
-                localStorage.setItem(
-                  "lastProcessedTimestamp",
-                  data.timestamp.toString()
-                );
-              }
-              return;
-            }
+          if (data.timestamp) {
+            lastProcessedTimestamp.current = data.timestamp;
+          }
+          return;
+        }
 
-            if (
-              data.timestamp &&
-              data.timestamp <= lastProcessedTimestamp.current
-            ) {
-              console.log("Duplicate or old update detected, skipping...", {
-                received: data.timestamp,
-                lastProcessed: lastProcessedTimestamp.current,
-              });
-              return;
-            }
+        if (
+          data.timestamp &&
+          data.timestamp <= lastProcessedTimestamp.current
+        ) {
+          console.log("Duplicate or old update detected, skipping...");
+          return;
+        }
 
-            const now = Math.floor(Date.now() / 1000);
-            if (data.timestamp && now - data.timestamp > 10) {
-              console.log("Old update detected (>10 seconds), skipping...");
-              return;
-            }
+        const now = Math.floor(Date.now() / 1000);
+        if (data.timestamp && now - data.timestamp > 10) {
+          console.log("Old update detected (>10 seconds), skipping...");
+          return;
+        }
 
-            if (data.timestamp) {
-              lastProcessedTimestamp.current = data.timestamp;
-              localStorage.setItem(
-                "lastProcessedTimestamp",
-                data.timestamp.toString()
-              );
-            }
+        if (data.timestamp) {
+          lastProcessedTimestamp.current = data.timestamp;
+        }
 
-            if (data.medicineId && data.status) {
-              handleFirebaseUpdate(data);
-            }
-          });
-        })
-        .catch((error) => {
-          console.error("Firebase service error:", error);
-          setIsConnected(false);
-        });
+        if (data.medicineId && data.scheduleId && data.status) {
+          handleFirebaseUpdate(data);
+        }
+      });
     } catch (error) {
-      console.error("Firebase setup error:", error);
+      console.error("Firebase listener error:", error);
       setIsConnected(false);
     }
 
     return () => {
-      console.log("Cleaning up Firebase listener");
+      console.log("Cleaning up Firebase listeners");
       if (unsubscribe) {
         unsubscribe();
+      }
+      if (medicinesUnsubscribe) {
+        medicinesUnsubscribe();
       }
       setIsConnected(false);
       isFirstLoad.current = true;
     };
   }, []);
 
-  const handleFirebaseUpdate = (data: FirebaseData) => {
-    const { medicineId, status, time = "", date = "", datetime = "" } = data;
+  const handleFirebaseUpdate = (data: FirebaseUpdate) => {
+    const {
+      medicineId,
+      scheduleId,
+      status,
+      time = "",
+      date = "",
+      datetime = "",
+    } = data;
 
     setMedicines((prev) => {
       const updated = prev.map((med) => {
         if (med.id === medicineId) {
-          if (status === "dispensed") {
-            addAlert("dispensed", `${med.name} dispensed at ${time}`);
-            return {
-              ...med,
-              dispensed: true,
-              taken: false,
-              alert: false,
-              takenAt: undefined,
-              takenDate: undefined,
-              alertTime: undefined,
-            };
-          } else if (status === "taken") {
-            addAlert("taken", `${med.name} taken at ${time}`);
-            return {
-              ...med,
-              dispensed: true,
-              taken: true,
-              alert: false,
-              takenAt: time,
-              takenDate: date,
-              alertTime: undefined,
-            };
-          } else if (status === "alert") {
-            addAlert("missed", `Missed ${med.name} dose at ${time}`);
-            return {
-              ...med,
-              dispensed: true,
-              taken: false,
-              alert: true,
-              takenAt: undefined,
-              takenDate: undefined,
-              alertTime: time,
-            };
+          const updatedSchedules = med.schedules.map((sched) => {
+            if (sched.id === scheduleId) {
+              if (status === "dispensed") {
+                addAlert("dispensed", `${med.name} (${sched.time}) dispensed`);
+                return {
+                  ...sched,
+                  dispensed: true,
+                  taken: false,
+                  alert: false,
+                };
+              } else if (status === "taken") {
+                addAlert(
+                  "taken",
+                  `${med.name} (${sched.time}) taken at ${time}`
+                );
+                return {
+                  ...sched,
+                  dispensed: true,
+                  taken: true,
+                  alert: false,
+                };
+              } else if (status === "alert") {
+                addAlert("missed", `${med.name} (${sched.time}) at ${time}`);
+                return {
+                  ...sched,
+                  dispensed: true,
+                  taken: false,
+                  alert: true,
+                };
+              }
+            }
+            return sched;
+          });
+
+          const medicine = { ...med, schedules: updatedSchedules };
+          const schedule = medicine.schedules.find((s) => s.id === scheduleId);
+          if (schedule) {
+            showNotification(medicine, schedule, status || "", time, date);
           }
+
+          return medicine;
         }
         return med;
       });
-
-      localStorage.setItem("medicineSchedules", JSON.stringify(updated));
-      console.log("Saved medicines to localStorage after Firebase update");
-
-      const medicine = updated.find((m) => m.id === medicineId);
-      if (medicine && (status === "taken" || status === "alert")) {
-        saveToHistory(medicine, status || "", time, date);
-      }
-
-      if (medicine) {
-        showNotification(medicine, status || "", time, date);
-      }
 
       setLastUpdate(datetime);
       return updated;
     });
   };
 
-  const saveToHistory = (
-    medicine: MedicineSchedule,
-    status: string,
-    time: string,
-    date: string
-  ) => {
-    try {
-      if (status === "taken" || status === "alert") {
-        const history = JSON.parse(
-          localStorage.getItem("medicineHistory") || "[]"
-        );
-
-        const isDuplicate = history.some(
-          (record: any) =>
-            record.name === medicine.name &&
-            record.date === date &&
-            record.takenTime === time &&
-            record.status === (status === "taken" ? "taken" : "missed")
-        );
-
-        if (!isDuplicate) {
-          history.push({
-            id: Date.now().toString(),
-            name: medicine.name,
-            dosage: medicine.dosage,
-            scheduledTime: medicine.time,
-            takenTime: time,
-            date: date,
-            status: status === "taken" ? "taken" : "missed",
-          });
-          localStorage.setItem("medicineHistory", JSON.stringify(history));
-          console.log("History saved successfully");
-        } else {
-          console.log("Duplicate history entry prevented");
-        }
-      }
-    } catch (error) {
-      console.error("Error saving to history:", error);
-    }
-  };
-
   const showNotification = (
-    medicine: MedicineSchedule,
+    medicine: Medicine,
+    schedule: Schedule,
     status: string,
     time: string,
     date: string
   ) => {
-    const medicineName = medicine.name;
+    const medicineName = `${medicine.name} (${schedule.time})`;
 
     if (status === "dispensed") {
       setNotification(`💊 ${medicineName} dispensed - monitoring started`);
@@ -357,53 +278,29 @@ function Dashboard() {
     }
   };
 
-  const handleManualToggle = async (id: string) => {
-    const medicine = medicines.find((m) => m.id === id);
+  const handleScheduleToggle = async (
+    medicineId: string,
+    scheduleId: string
+  ) => {
+    const medicine = medicines.find((m) => m.id === medicineId);
     if (!medicine) return;
 
-    const currentTime = new Date().toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    const currentDate = new Date().toLocaleDateString("en-US");
+    const schedule = medicine.schedules.find((s) => s.id === scheduleId);
+    if (!schedule) return;
+
     const timestamp = Math.floor(Date.now() / 1000);
 
-    let newStatus: string;
-    let updated: MedicineSchedule[];
-
-    // If medicine hasn't been dispensed yet, send command to Arduino
-    if (!medicine.dispensed && !medicine.taken) {
+    // If not dispensed yet, send dispense command to Arduino
+    if (!schedule.dispensed && !schedule.taken) {
       try {
-        // Send dispense command to Firebase for Arduino to read
-        const response = await fetch(
-          "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app/dispense_command.json",
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              medicineId: id,
-              timestamp: timestamp,
-            }),
-          }
+        await firebaseService.sendDispenseCommand(medicineId, scheduleId);
+
+        setNotification(
+          `💊 Dispense command sent for ${medicine.name} (${schedule.time})...`
         );
-
-        if (response.ok) {
-          setNotification(`💊 Dispense command sent for ${medicine.name}...`);
-          setNotificationType("success");
-          setTimeout(() => setNotification(""), 3000);
-
-          // Arduino will handle the actual dispensing and update Firebase
-          // The status will be updated automatically via Firebase listener
-          return;
-        } else {
-          setNotification(`❌ Failed to send dispense command`);
-          setNotificationType("error");
-          setTimeout(() => setNotification(""), 3000);
-          return;
-        }
+        setNotificationType("success");
+        setTimeout(() => setNotification(""), 3000);
+        return;
       } catch (error) {
         console.error("Error sending dispense command:", error);
         setNotification(`❌ Error sending dispense command`);
@@ -413,106 +310,150 @@ function Dashboard() {
       }
     }
 
-    // Rest of the function remains the same for manual marking
-    else if (medicine.dispensed && !medicine.taken) {
-      newStatus = "taken";
-      updated = medicines.map((med) =>
-        med.id === id
-          ? {
+    // Manual marking as taken
+    else if (schedule.dispensed && !schedule.taken) {
+      const currentTime = new Date().toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      const currentDate = new Date().toLocaleDateString("en-US");
+
+      setMedicines((prev) =>
+        prev.map((med) => {
+          if (med.id === medicineId) {
+            return {
               ...med,
-              dispensed: true,
-              taken: true,
-              alert: false,
-              takenAt: currentTime,
-              takenDate: currentDate,
-              alertTime: undefined,
-            }
-          : med
+              schedules: med.schedules.map((sched) => {
+                if (sched.id === scheduleId) {
+                  return {
+                    ...sched,
+                    dispensed: true,
+                    taken: true,
+                    alert: false,
+                  };
+                }
+                return sched;
+              }),
+            };
+          }
+          return med;
+        })
       );
 
-      saveToHistory(medicine, "taken", currentTime, currentDate);
       addAlert(
         "taken",
-        `${medicine.name} taken at ${currentTime.substring(0, 5)}`
+        `${medicine.name} (${schedule.time}) taken at ${currentTime.substring(
+          0,
+          5
+        )}`
       );
 
-      setNotification(`✓ ${medicine.name} taken at ${currentTime}`);
+      setNotification(`✓ ${medicine.name} (${schedule.time}) marked as taken`);
       setNotificationType("success");
       setTimeout(() => setNotification(""), 3000);
-    } else {
-      newStatus = "reset";
-      updated = medicines.map((med) =>
-        med.id === id
-          ? {
-              ...med,
-              dispensed: false,
-              taken: false,
-              alert: false,
-              takenAt: undefined,
-              takenDate: undefined,
-              alertTime: undefined,
-            }
-          : med
-      );
 
-      setNotification(`${medicine.name} reset`);
-      setNotificationType("success");
-      setTimeout(() => setNotification(""), 3000);
+      // Update Firebase
+      try {
+        await fetch(
+          "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app/medicine_updates.json",
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              medicineId: medicineId,
+              scheduleId: scheduleId,
+              medicine_taken: true,
+              status: "taken",
+              time: currentTime,
+              date: currentDate,
+              datetime: new Date().toLocaleString(),
+              timestamp: timestamp,
+            }),
+          }
+        );
+      } catch (error) {
+        console.error("Error updating Firebase:", error);
+      }
     }
 
-    setMedicines(updated);
-    localStorage.setItem("medicineSchedules", JSON.stringify(updated));
-    console.log("Saved medicines to localStorage after manual toggle");
+    // Reset
+    else {
+      setMedicines((prev) =>
+        prev.map((med) => {
+          if (med.id === medicineId) {
+            return {
+              ...med,
+              schedules: med.schedules.map((sched) => {
+                if (sched.id === scheduleId) {
+                  return {
+                    ...sched,
+                    dispensed: false,
+                    taken: false,
+                    alert: false,
+                  };
+                }
+                return sched;
+              }),
+            };
+          }
+          return med;
+        })
+      );
 
-    lastProcessedTimestamp.current = timestamp;
-    localStorage.setItem("lastProcessedTimestamp", timestamp.toString());
-
-    try {
-      import("../services/firebaseService").then((module) => {
-        module.firebaseService.update({
-          medicineId: id,
-          medicine_taken: medicine.taken,
-          status: newStatus,
-          time: currentTime,
-          date: currentDate,
-          datetime: new Date().toLocaleString(),
-          timestamp: timestamp,
-        });
-      });
-    } catch (error) {
-      console.error("Error updating Firebase:", error);
+      setNotification(`${medicine.name} (${schedule.time}) reset`);
+      setNotificationType("success");
+      setTimeout(() => setNotification(""), 3000);
     }
   };
 
-  const resetDailyStatus = () => {
-    const reset = medicines.map((med) => ({
-      ...med,
-      taken: false,
-      dispensed: false,
-      alert: false,
-      takenAt: undefined,
-      takenDate: undefined,
-      alertTime: undefined,
-    }));
-    setMedicines(reset);
-    localStorage.setItem("medicineSchedules", JSON.stringify(reset));
-    console.log("Saved medicines to localStorage after reset");
+  const resetAllSchedules = () => {
+    setMedicines((prev) =>
+      prev.map((med) => ({
+        ...med,
+        schedules: med.schedules.map((sched) => ({
+          ...sched,
+          taken: false,
+          dispensed: false,
+          alert: false,
+        })),
+      }))
+    );
 
-    setNotification("✓ Daily status reset");
+    setNotification("✓ All schedules reset");
     setNotificationType("success");
     setTimeout(() => setNotification(""), 3000);
   };
 
   const getTodayStats = () => {
-    const total = medicines.length;
-    const taken = medicines.filter((m) => m.taken).length;
-    const alerts = medicines.filter((m) => m.alert).length;
-    const pending = medicines.filter(
-      (m) => m.dispensed && !m.taken && !m.alert
-    ).length;
-    const percentage = total > 0 ? Math.round((taken / total) * 100) : 0;
+    let totalSchedules = 0;
+    let takenSchedules = 0;
+    let alertSchedules = 0;
+    let pendingSchedules = 0;
 
-    return { total, taken, pending, alerts, percentage };
+    medicines.forEach((med) => {
+      med.schedules.forEach((sched) => {
+        totalSchedules++;
+        if (sched.taken) takenSchedules++;
+        else if (sched.alert) alertSchedules++;
+        else if (sched.dispensed) pendingSchedules++;
+      });
+    });
+
+    const percentage =
+      totalSchedules > 0
+        ? Math.round((takenSchedules / totalSchedules) * 100)
+        : 0;
+
+    return {
+      total: totalSchedules,
+      taken: takenSchedules,
+      pending: pendingSchedules,
+      alerts: alertSchedules,
+      percentage,
+    };
   };
 
   const stats = getTodayStats();
@@ -545,6 +486,17 @@ function Dashboard() {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <RefreshCw className="w-8 h-8 text-purple-600 animate-spin mx-auto mb-2" />
+          <p className="text-gray-600">Loading medicines...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       {notification && (
@@ -572,11 +524,11 @@ function Dashboard() {
             </span>
           </div>
           <p className="text-gray-600 text-sm font-medium mb-1">
-            Upcoming Appt.
+            Total Schedules
           </p>
           <p className="text-4xl font-bold text-gray-800">{stats.total}</p>
           <p className="text-xs text-gray-500 mt-2">
-            {medicines.filter((m) => !m.dispensed).length} not confirmed
+            {medicines.length} medicine{medicines.length !== 1 ? "s" : ""}
           </p>
         </div>
 
@@ -585,15 +537,13 @@ function Dashboard() {
             <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm">
               <CheckCircle className="w-6 h-6 text-teal-600" />
             </div>
-            <span className="text-xs text-teal-600 font-semibold flex items-center">
-              <span className="text-lg mr-1">↑</span> 3.4%
+            <span className="text-xs text-teal-600 font-semibold bg-white px-3 py-1 rounded-full">
+              {stats.taken}/{stats.total}
             </span>
           </div>
-          <p className="text-gray-600 text-sm font-medium mb-1">
-            Finished Appt.
-          </p>
+          <p className="text-gray-600 text-sm font-medium mb-1">Taken Today</p>
           <p className="text-4xl font-bold text-gray-800">{stats.taken}</p>
-          <p className="text-xs text-gray-500 mt-2">vs last month</p>
+          <p className="text-xs text-gray-500 mt-2">{stats.pending} pending</p>
         </div>
 
         {/* Recent Alerts Card */}
@@ -651,122 +601,137 @@ function Dashboard() {
               </span>
             </div>
           </div>
-          <button
-            onClick={resetDailyStatus}
-            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors text-sm font-medium"
-          >
-            Reset Daily Status
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={loadMedicines}
+              className="px-4 py-2 bg-purple-100 text-purple-700 rounded-xl hover:bg-purple-200 transition-colors text-sm font-medium flex items-center space-x-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Reload</span>
+            </button>
+            <button
+              onClick={resetAllSchedules}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors text-sm font-medium"
+            >
+              Reset All
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-3">
-          {medicines.map((medicine) => (
-            <div
-              key={medicine.id}
-              className={`rounded-2xl p-4 transition-all border-2 ${
-                medicine.alert
-                  ? "border-rose-200 bg-rose-50"
-                  : medicine.taken
-                  ? "border-teal-200 bg-teal-50"
-                  : medicine.dispensed
-                  ? "border-amber-200 bg-amber-50"
-                  : "border-gray-100 bg-white hover:border-gray-200"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
-                  <div
-                    className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                      medicine.alert
-                        ? "bg-rose-100"
-                        : medicine.taken
-                        ? "bg-teal-100"
-                        : medicine.dispensed
-                        ? "bg-amber-100"
-                        : "bg-gray-100"
-                    }`}
-                  >
-                    {medicine.alert ? (
-                      <AlertTriangle className="w-6 h-6 text-rose-600" />
-                    ) : (
-                      <Pill
-                        className={`w-6 h-6 ${
-                          medicine.taken
-                            ? "text-teal-600"
-                            : medicine.dispensed
-                            ? "text-amber-600"
-                            : "text-gray-500"
-                        }`}
-                      />
-                    )}
+        {medicines.length === 0 ? (
+          <div className="text-center py-12">
+            <Pill className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <p className="text-gray-500 mb-2">No medicines found</p>
+            <p className="text-sm text-gray-400">
+              Add medicines in the Account page
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {medicines.map((medicine) => (
+              <div
+                key={medicine.id}
+                className="rounded-2xl p-5 border-2 border-gray-100 bg-white hover:border-gray-200 transition-all"
+              >
+                {/* Medicine Header */}
+                <div className="flex items-center space-x-3 mb-4">
+                  <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
+                    <Pill className="w-5 h-5 text-purple-600" />
                   </div>
                   <div>
                     <h4 className="font-bold text-gray-800 text-base">
                       {medicine.name}
                     </h4>
-                    <p className="text-sm text-gray-500">
-                      {medicine.dosage} • {medicine.time}
-                    </p>
-                    {medicine.alert && (
-                      <p className="text-xs text-rose-600 font-semibold mt-1 flex items-center space-x-1">
-                        <span>
-                          ⚠️ NOT TAKEN - Alert at {medicine.alertTime}
-                        </span>
-                      </p>
-                    )}
-                    {medicine.taken && medicine.takenAt && (
-                      <p className="text-xs text-teal-600 font-medium mt-1">
-                        ✓ Taken at {medicine.takenAt} on {medicine.takenDate}
-                      </p>
-                    )}
-                    {medicine.dispensed &&
-                      !medicine.taken &&
-                      !medicine.alert && (
-                        <p className="text-xs text-amber-600 font-medium mt-1">
-                          ⏳ Dispensed - Monitoring...
-                        </p>
-                      )}
+                    <p className="text-sm text-gray-500">{medicine.dosage}</p>
+                  </div>
+                  <div className="ml-auto">
+                    <span className="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                      {medicine.schedules.filter((s) => s.taken).length}/
+                      {medicine.schedules.length} taken
+                    </span>
                   </div>
                 </div>
 
-                <button
-                  onClick={() => handleManualToggle(medicine.id)}
-                  className={`px-5 py-2.5 rounded-xl font-medium transition-all text-sm ${
-                    medicine.alert
-                      ? "bg-rose-500 text-white hover:bg-rose-600 shadow-lg shadow-rose-200"
-                      : medicine.taken
-                      ? "bg-teal-500 text-white hover:bg-teal-600 shadow-lg shadow-teal-200"
-                      : medicine.dispensed
-                      ? "bg-amber-500 text-white hover:bg-amber-600 shadow-lg shadow-amber-200"
-                      : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                  }`}
-                >
-                  {medicine.alert ? (
-                    <div className="flex items-center space-x-2">
-                      <AlertTriangle className="w-4 h-4" />
-                      <span>Alert</span>
+                {/* Schedules */}
+                <div className="space-y-2 ml-13">
+                  {medicine.schedules.map((schedule) => (
+                    <div
+                      key={schedule.id}
+                      className={`rounded-xl p-3 flex items-center justify-between border-2 transition-all ${
+                        schedule.alert
+                          ? "border-rose-200 bg-rose-50"
+                          : schedule.taken
+                          ? "border-teal-200 bg-teal-50"
+                          : schedule.dispensed
+                          ? "border-amber-200 bg-amber-50"
+                          : "border-gray-100 bg-gray-50"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Clock
+                          className={`w-4 h-4 ${
+                            schedule.alert
+                              ? "text-rose-600"
+                              : schedule.taken
+                              ? "text-teal-600"
+                              : schedule.dispensed
+                              ? "text-amber-600"
+                              : "text-gray-400"
+                          }`}
+                        />
+                        <div>
+                          <p className="font-semibold text-gray-800 text-sm">
+                            {schedule.time}
+                          </p>
+                          {schedule.alert && (
+                            <p className="text-xs text-rose-600 font-medium">
+                              ⚠️ Not taken
+                            </p>
+                          )}
+                          {schedule.taken && (
+                            <p className="text-xs text-teal-600 font-medium">
+                              ✓ Taken
+                            </p>
+                          )}
+                          {schedule.dispensed &&
+                            !schedule.taken &&
+                            !schedule.alert && (
+                              <p className="text-xs text-amber-600 font-medium">
+                                ⏳ Dispensed
+                              </p>
+                            )}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() =>
+                          handleScheduleToggle(medicine.id, schedule.id)
+                        }
+                        className={`px-4 py-1.5 rounded-lg font-medium transition-all text-xs ${
+                          schedule.alert
+                            ? "bg-rose-500 text-white hover:bg-rose-600"
+                            : schedule.taken
+                            ? "bg-teal-500 text-white hover:bg-teal-600"
+                            : schedule.dispensed
+                            ? "bg-amber-500 text-white hover:bg-amber-600"
+                            : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        }`}
+                      >
+                        {schedule.alert
+                          ? "Alert"
+                          : schedule.taken
+                          ? "Taken"
+                          : schedule.dispensed
+                          ? "Mark Taken"
+                          : "Dispense"}
+                      </button>
                     </div>
-                  ) : medicine.taken ? (
-                    <div className="flex items-center space-x-2">
-                      <CheckCircle className="w-4 h-4" />
-                      <span>Taken</span>
-                    </div>
-                  ) : medicine.dispensed ? (
-                    <div className="flex items-center space-x-2">
-                      <Clock className="w-4 h-4" />
-                      <span>Mark Taken</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center space-x-2">
-                      <XCircle className="w-4 h-4" />
-                      <span>Dispense</span>
-                    </div>
-                  )}
-                </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {lastUpdate && (

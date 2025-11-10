@@ -1,5 +1,24 @@
 // src/types.ts
 
+export interface Schedule {
+  id: string;
+  time: string;
+  dispensed: boolean;
+  taken: boolean;
+  alert: boolean;
+  takenAt?: string;
+  takenDate?: string;
+  alertTime?: string;
+}
+
+export interface Medicine {
+  id: string; // "slot_0", "slot_1", "slot_2"
+  name: string;
+  dosage: string;
+  servoIndex: number; // 0, 1, or 2
+  schedules: Schedule[];
+}
+
 export interface MedicineSchedule {
   id: string;
   name: string;
@@ -9,8 +28,8 @@ export interface MedicineSchedule {
   takenAt?: string;
   takenDate?: string;
   dispensed?: boolean;
-  alert?: boolean;  // Alert flag for untaken medicine after 2 minutes
-  alertTime?: string;  // Time when alert was triggered
+  alert?: boolean;
+  alertTime?: string;
 }
 
 export interface HistoryRecord {
@@ -31,10 +50,16 @@ export interface UserProfile {
 
 export interface FirebaseData {
   medicineId?: string;
+  scheduleId?: string;
   medicine_taken?: boolean;
-  status?: string;  // 'dispensed', 'taken', or 'alert'
+  status?: string;
   time?: string;
   date?: string;
   datetime?: string;
   timestamp?: number;
+}
+
+export interface SyncCommand {
+  reload: boolean;
+  timestamp: number;
 }
