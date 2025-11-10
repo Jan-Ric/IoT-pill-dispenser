@@ -60,9 +60,7 @@ function History() {
 
   const clearHistory = () => {
     if (confirm("Are you sure you want to clear all history?")) {
-      // Clear from localStorage
       localStorage.removeItem("medicineHistory");
-      // Clear from state
       setHistory([]);
       console.log("History cleared from localStorage and state");
     }
@@ -70,6 +68,11 @@ function History() {
 
   const exportHistory = () => {
     try {
+      if (history.length === 0) {
+        alert("No history to export");
+        return;
+      }
+
       // Prepare data for Excel
       const excelData = history.map((record) => ({
         "Medicine Name": record.name,
@@ -164,10 +167,39 @@ function History() {
     }
   };
 
+  const getMedicineBreakdown = () => {
+    if (!Array.isArray(history) || history.length === 0) return [];
+
+    const breakdown: Record<
+      string,
+      { name: string; total: number; taken: number; missed: number }
+    > = {};
+
+    history.forEach((record) => {
+      if (!breakdown[record.name]) {
+        breakdown[record.name] = {
+          name: record.name,
+          total: 0,
+          taken: 0,
+          missed: 0,
+        };
+      }
+      breakdown[record.name].total++;
+      if (record.status === "taken") {
+        breakdown[record.name].taken++;
+      } else {
+        breakdown[record.name].missed++;
+      }
+    });
+
+    return Object.values(breakdown);
+  };
+
   const filteredHistory = getFilteredHistory();
   const sortedHistory = getSortedHistory();
   const stats = getStats();
   const uniqueDates = getUniqueDates();
+  const medicineBreakdown = getMedicineBreakdown();
 
   return (
     <div className="space-y-5">
@@ -215,6 +247,7 @@ function History() {
             Total Records
           </p>
           <p className="text-4xl font-bold text-gray-800">{stats.total}</p>
+          <p className="text-xs text-gray-500 mt-2">All medicine schedules</p>
         </div>
 
         <div className="bg-gradient-to-br from-teal-50 to-teal-100 rounded-3xl p-6 border border-teal-200">
@@ -225,6 +258,7 @@ function History() {
           </div>
           <p className="text-gray-600 text-sm font-medium mb-1">Taken</p>
           <p className="text-4xl font-bold text-gray-800">{stats.taken}</p>
+          <p className="text-xs text-gray-500 mt-2">Successfully completed</p>
         </div>
 
         <div className="bg-gradient-to-br from-rose-50 to-rose-100 rounded-3xl p-6 border border-rose-200">
@@ -235,6 +269,7 @@ function History() {
           </div>
           <p className="text-gray-600 text-sm font-medium mb-1">Missed</p>
           <p className="text-4xl font-bold text-gray-800">{stats.missed}</p>
+          <p className="text-xs text-gray-500 mt-2">Alerts triggered</p>
         </div>
 
         <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-3xl p-6 border border-purple-200">
@@ -249,8 +284,76 @@ function History() {
           <p className="text-4xl font-bold text-gray-800">
             {stats.adherenceRate}%
           </p>
+          <p className="text-xs text-gray-500 mt-2">Overall compliance</p>
         </div>
       </div>
+
+      {/* Medicine Breakdown */}
+      {medicineBreakdown.length > 0 && (
+        <div className="bg-white rounded-3xl shadow-sm p-6 border border-gray-100">
+          <h3 className="text-xl font-bold text-gray-800 mb-4">
+            Medicine Breakdown
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {medicineBreakdown.map((med) => {
+              const rate =
+                med.total > 0 ? Math.round((med.taken / med.total) * 100) : 0;
+              return (
+                <div
+                  key={med.name}
+                  className="p-4 border-2 border-gray-100 rounded-xl hover:border-gray-200 transition-all"
+                >
+                  <div className="flex items-center space-x-3 mb-3">
+                    <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
+                      <Pill className="w-5 h-5 text-purple-600" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-gray-800 text-sm">
+                        {med.name}
+                      </h4>
+                      <p className="text-xs text-gray-500">
+                        {med.total} schedule{med.total !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-teal-600 font-medium">✓ Taken</span>
+                      <span className="font-bold text-gray-800">
+                        {med.taken}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-rose-600 font-medium">
+                        ✗ Missed
+                      </span>
+                      <span className="font-bold text-gray-800">
+                        {med.missed}
+                      </span>
+                    </div>
+                    <div className="pt-2 border-t border-gray-100">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-purple-600 font-semibold">
+                          Rate
+                        </span>
+                        <span className="font-bold text-purple-800">
+                          {rate}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                        <div
+                          className="bg-purple-500 h-2 rounded-full transition-all"
+                          style={{ width: `${rate}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white rounded-3xl shadow-sm p-5 border border-gray-100">
@@ -387,6 +490,13 @@ function History() {
             <strong className="text-purple-900">{stats.total}</strong> scheduled
             medicines ({stats.adherenceRate}% adherence rate)
           </p>
+          {medicineBreakdown.length > 0 && (
+            <p className="text-xs text-purple-700 mt-2">
+              Tracking {medicineBreakdown.length} medicine
+              {medicineBreakdown.length !== 1 ? "s" : ""} with multiple daily
+              schedules
+            </p>
+          )}
         </div>
       )}
     </div>
