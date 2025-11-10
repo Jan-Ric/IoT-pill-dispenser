@@ -11,6 +11,7 @@ import {
   Clock,
   CheckCircle,
   ArrowRight,
+  Mail,
 } from "lucide-react";
 
 function About() {
@@ -72,13 +73,20 @@ function About() {
     },
     {
       step: 5,
+      title: "Email Notification",
+      description:
+        "When medicine is not taken within the 1-minute monitoring period, an automated email notification is sent to caregivers with details about the missed medication.",
+      icon: <Mail className="w-8 h-8 text-orange-600" />,
+    },
+    {
+      step: 6,
       title: "Data Logging",
       description:
         "All activities (dispensed, taken, missed) are logged to Firebase and displayed in real-time.",
       icon: <Database className="w-8 h-8 text-purple-600" />,
     },
     {
-      step: 6,
+      step: 7,
       title: "Confirmation",
       description:
         "Dashboard updates status showing medicine taken, adherence rates, and complete history.",
@@ -163,6 +171,19 @@ function About() {
                   {" "}
                   Provide immediate audio and digital alerts when medications
                   are not taken
+                </span>
+              </div>
+            </div>
+            <div className="flex items-start space-x-3 p-3 bg-orange-50 rounded-xl border border-orange-100">
+              <CheckCircle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <span className="font-semibold text-gray-800">
+                  Email Notifications:
+                </span>
+                <span className="text-gray-600">
+                  {" "}
+                  Send automated email alerts to caregivers when medications are
+                  missed after the 1-minute monitoring period
                 </span>
               </div>
             </div>
@@ -330,6 +351,10 @@ function About() {
               <li className="flex items-start space-x-2">
                 <span className="text-purple-600 font-bold">•</span>
                 <span>Firebase Realtime Database</span>
+              </li>
+              <li className="flex items-start space-x-2">
+                <span className="text-purple-600 font-bold">•</span>
+                <span>Email Notification Service</span>
               </li>
               <li className="flex items-start space-x-2">
                 <span className="text-purple-600 font-bold">•</span>

@@ -643,21 +643,8 @@ function Account() {
           {["slot_0", "slot_1", "slot_2"].map((slotId) => {
             const medicine = medicines[slotId as keyof typeof medicines];
             const isEditing = editingSlot === slotId;
-            const medToShow = isEditing ? tempMedicine : medicine;
 
-            if (!medToShow && !isEditing) {
-              return (
-                <div
-                  key={slotId}
-                  className="p-5 border-2 border-dashed border-gray-200 rounded-2xl text-center"
-                >
-                  <p className="text-gray-400 text-sm">
-                    Slot {slotId.split("_")[1]} - Empty
-                  </p>
-                </div>
-              );
-            }
-
+            // FIXED: Show editing form if this slot is being edited, regardless of whether it has existing data
             if (isEditing && tempMedicine) {
               return (
                 <div
@@ -766,8 +753,8 @@ function Account() {
               );
             }
 
-            // Display mode
-            if (medicine) {
+            // Display mode - show saved medicine
+            if (medicine && !isEditing) {
               return (
                 <div
                   key={slotId}
@@ -807,6 +794,20 @@ function Account() {
                       <span>Edit</span>
                     </button>
                   </div>
+                </div>
+              );
+            }
+
+            // Empty slot - only show if not editing
+            if (!medicine && !isEditing) {
+              return (
+                <div
+                  key={slotId}
+                  className="p-5 border-2 border-dashed border-gray-200 rounded-2xl text-center"
+                >
+                  <p className="text-gray-400 text-sm">
+                    Slot {slotId.split("_")[1]} - Empty
+                  </p>
                 </div>
               );
             }
