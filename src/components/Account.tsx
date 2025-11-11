@@ -17,6 +17,22 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { firebaseService } from "../services/firebaseService";
+import { getDatabase, ref, set, get } from "firebase/database";
+import { initializeApp } from "firebase/app";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDSwvmOYIJvi1yGUsptwjseRJlenYLJGzo",
+  authDomain: "meditrack-24ee5.firebaseapp.com",
+  databaseURL:
+    "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "meditrack-24ee5",
+  storageBucket: "meditrack-24ee5.appspot.com",
+  messagingSenderId: "1044793149591",
+  appId: "1:1044793149591:web:baceccc719e4dce0eb81d2",
+};
+
+const app = initializeApp(firebaseConfig, "account-app");
+const database = getDatabase(app);
 
 interface Schedule {
   id: string;
@@ -49,18 +65,43 @@ interface NotificationSettings {
 
 function Account() {
   const [profile, setProfile] = useState<UserProfile>({
-    fullName: "Sylwia",
-    email: "sylwia@email.com",
+    fullName: "Sean",
+    email: "sean.vidanes22@gmail.com",
     phone: "+63 (917) 123-4567",
-    location: "Quezon City, Metro Manila, PH",
+    location: "Pililla, Rizal, PH",
   });
+
+  // Load user profile from Firebase
+  useEffect(() => {
+    const loadProfile = async () => {
+      try {
+        const userProfileRef = ref(database, "user_profile");
+        const snapshot = await get(userProfileRef);
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const loadedProfile = {
+            fullName: data.fullName || "Sean",
+            email: data.email || "sean.vidanes22@gmail.com",
+            phone: data.phone || "+63 (917) 123-4567",
+            location: data.location || "Pililla, Rizal, PH",
+          };
+          setProfile(loadedProfile);
+          setOriginalProfile(loadedProfile);
+        }
+      } catch (error) {
+        console.error("Error loading profile:", error);
+      }
+    };
+    loadProfile();
+  }, []);
+
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileNotification, setProfileNotification] = useState("");
   const [originalProfile, setOriginalProfile] = useState<UserProfile>({
-    fullName: "Sylwia",
-    email: "sylwia@email.com",
+    fullName: "Sean",
+    email: "sean.vidanes22@gmail.com",
     phone: "+63 (917) 123-4567",
-    location: "Quezon City, Metro Manila, PH",
+    location: "Pililla, Rizal, PH",
   });
 
   const [notifications, setNotifications] = useState<NotificationSettings>({
@@ -111,11 +152,26 @@ function Account() {
     setProfile((prev) => ({ ...prev, [field]: value }));
   };
 
-  const saveProfile = () => {
-    setIsEditingProfile(false);
-    setOriginalProfile(profile);
-    setProfileNotification("✓ Profile updated successfully!");
-    setTimeout(() => setProfileNotification(""), 3000);
+  const saveProfile = async () => {
+    try {
+      // Save to Firebase
+      const userProfileRef = ref(database, "user_profile");
+      await set(userProfileRef, {
+        fullName: profile.fullName,
+        email: profile.email,
+        phone: profile.phone,
+        location: profile.location,
+      });
+
+      setIsEditingProfile(false);
+      setOriginalProfile(profile);
+      setProfileNotification("✓ Profile updated successfully!");
+      setTimeout(() => setProfileNotification(""), 3000);
+    } catch (error) {
+      console.error("Error saving profile:", error);
+      setProfileNotification("❌ Error saving profile");
+      setTimeout(() => setProfileNotification(""), 3000);
+    }
   };
 
   const cancelProfileEdit = () => {

@@ -10,27 +10,69 @@ const SENDGRID_KEY = process.env.SENDGRID_KEY || "";
 const CAREGIVER_EMAIL = process.env.CAREGIVER_EMAIL || "";
 const FROM_EMAIL = "sean.vidanes22@gmail.com";
 
-// ✅ Helper function to get medicine data from Firebase
-async function getMedicineData(medicineId: string): Promise<{name: string; dosage: string; schedules: any[]} | null> {
+// ✅ FIXED: Helper function to convert medicineId to slotId
+function getSlotIdFromMedicineId(medicineId: string): string {
+  // Handle two cases:
+  // Case 1: Arduino sends "1", "2", "3" -> convert to slot_0, slot_1, slot_2
+  // Case 2: Arduino sends "slot_0", "slot_1", "slot_2" -> use as is
+  
+  if (medicineId.startsWith("slot_")) {
+    // Already in slot format, return as is
+    console.log(`📦 MedicineId already in slot format: ${medicineId}`);
+    return medicineId;
+  }
+  
+  // Convert numeric medicineId to slot
+  const slotNumber = parseInt(medicineId) - 1;
+  const slotId = `slot_${slotNumber}`;
+  console.log(`📦 Converted medicineId ${medicineId} to ${slotId}`);
+  return slotId;
+}
+
+// ✅ FIXED: Helper function to get medicine data from Firebase
+async function getMedicineData(medicineId: string): Promise<{
+  name: string; 
+  dosage: string; 
+  schedules: any[];
+  slotId: string;
+} | null> {
   try {
     const db = admin.database();
-    const slotId = `slot_${parseInt(medicineId) - 1}`;
+    const slotId = getSlotIdFromMedicineId(medicineId);
+    
+    console.log(`🔍 Fetching medicine data for medicineId: "${medicineId}" -> slotId: "${slotId}"`);
+    
     const medicineRef = db.ref(`/medicines/${slotId}`);
     const snapshot = await medicineRef.once("value");
     const medicine = snapshot.val();
     
     if (!medicine) {
-      console.warn(`No medicine found for slot: ${slotId}`);
+      console.warn(`❌ No medicine found in database at path: /medicines/${slotId}`);
+      
+      // Debug: Let's see what's actually in the medicines node
+      const allMedicinesRef = db.ref("/medicines");
+      const allSnapshot = await allMedicinesRef.once("value");
+      const allMedicines = allSnapshot.val();
+      console.log("📋 Available medicines in database:", Object.keys(allMedicines || {}));
+      
       return null;
     }
+    
+    console.log(`✅ Medicine found for medicineId ${medicineId}:`, {
+      slotId,
+      name: medicine.name,
+      dosage: medicine.dosage,
+      scheduleCount: medicine.schedules?.length || 0
+    });
     
     return {
       name: medicine.name || `Medicine ${medicineId}`,
       dosage: medicine.dosage || "Unknown dosage",
-      schedules: medicine.schedules || []
+      schedules: medicine.schedules || [],
+      slotId
     };
   } catch (error) {
-    console.error("Error fetching medicine data:", error);
+    console.error("❌ Error fetching medicine data:", error);
     return null;
   }
 }
@@ -64,10 +106,32 @@ async function getAllMedicines(): Promise<Array<{slotId: string; medicine: any}>
   }
 }
 
-// ✅ Helper function to find schedule time by ID
+// ✅ FIXED: Helper function to find schedule time by ID
 function findScheduleTime(schedules: any[], scheduleId: string): string {
-  const schedule = schedules.find((s: any) => s.id === scheduleId);
-  return schedule ? schedule.time : "Unknown time";
+  console.log(`🔍 Looking for scheduleId: "${scheduleId}" in schedules:`, schedules);
+  
+  const schedule = schedules.find((s: any) => {
+    // Try exact match first
+    if (s.id === scheduleId) return true;
+    // Try string comparison (in case of type mismatch)
+    if (String(s.id) === String(scheduleId)) return true;
+    return false;
+  });
+  
+  if (schedule) {
+    console.log(`✅ Found schedule:`, schedule);
+    return schedule.time;
+  }
+  
+  console.warn(`⚠️ Schedule not found for ID: ${scheduleId}`);
+  
+  // Fallback: return first schedule time if available
+  if (schedules.length > 0) {
+    console.log(`⚠️ Using first schedule as fallback:`, schedules[0]);
+    return schedules[0].time;
+  }
+  
+  return "Unknown time";
 }
 
 // ✅ IMPROVED: Better date formatting with timezone awareness
@@ -82,6 +146,16 @@ function formatDate(dateString: string | undefined): string {
     return `${year}-${month}-${day}`;
   }
   return dateString;
+}
+
+// ✅ Format date for display (e.g., "November 11, 2025")
+function formatDateForDisplay(dateString: string): string {
+  const date = new Date(dateString + 'T00:00:00');
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
 }
 
 // ✅ NEW: Save to medicine history
@@ -115,7 +189,7 @@ async function saveMedicineHistory(data: {
   }
 }
 
-// Email Templates (keep all your existing HTML templates here)
+// Email Templates
 function getMedicineTakenEmailHTML(
   medicineName: string,
   dosage: string,
@@ -447,7 +521,7 @@ function getDailySummaryEmailHTML(
   `;
 }
 
-// ✅ IMPROVED: Cloud Function with history saving
+// ✅ IMPROVED: Cloud Function with better logging and medicine data fetching
 export const onMedicineUpdate = onValueUpdated(
   {
     ref: "/medicine_updates",
@@ -457,15 +531,19 @@ export const onMedicineUpdate = onValueUpdated(
     const newData = event.data.after.val();
     const oldData = event.data.before.val();
 
+    console.log("📥 Medicine update triggered");
+    console.log("New data:", JSON.stringify(newData, null, 2));
+    console.log("Old data:", JSON.stringify(oldData, null, 2));
+
     // Prevent duplicate emails
     if (JSON.stringify(newData) === JSON.stringify(oldData)) {
-      console.log("No changes detected, skipping email");
+      console.log("⏭️ No changes detected, skipping email");
       return null;
     }
 
     // Check if environment variables are set
     if (!SENDGRID_KEY || !CAREGIVER_EMAIL) {
-      console.error("Missing environment variables:", {
+      console.error("❌ Missing environment variables:", {
         hasSendGridKey: !!SENDGRID_KEY,
         hasCaregiverEmail: !!CAREGIVER_EMAIL,
         fromEmail: FROM_EMAIL,
@@ -485,11 +563,21 @@ export const onMedicineUpdate = onValueUpdated(
     const formattedDate = formatDate(rawDate);
     const timestamp = newData.timestamp || Date.now();
 
+    console.log("📋 Processing update:", {
+      medicineId,
+      scheduleId,
+      status,
+      taken,
+      time,
+      rawDate,
+      formattedDate
+    });
+
     // ✅ FETCH REAL MEDICINE DATA FROM FIREBASE
     const medicineData = await getMedicineData(medicineId);
     
     if (!medicineData) {
-      console.error(`Medicine data not found for ID: ${medicineId}`);
+      console.error(`❌ Medicine data not found for ID: ${medicineId}`);
       return null;
     }
 
@@ -497,17 +585,15 @@ export const onMedicineUpdate = onValueUpdated(
     const medicineDosage = medicineData.dosage;
     const scheduledTime = findScheduleTime(medicineData.schedules, scheduleId);
 
-    console.log("Medicine update detected:", {
+    console.log("✅ Medicine data retrieved:", {
       medicineId,
-      scheduleId,
+      slotId: medicineData.slotId,
       medicineName,
       medicineDosage,
+      scheduleId,
+      scheduledTime,
       status,
       taken,
-      time,
-      rawDate,
-      formattedDate,
-      scheduledTime,
     });
 
     // ✅ SAVE TO HISTORY BEFORE SENDING EMAIL
@@ -524,28 +610,30 @@ export const onMedicineUpdate = onValueUpdated(
     try {
       // Send email for "dispensed" status (medicine taken)
       if (status === "dispensed" && taken === true) {
+        const displayDate = formatDateForDisplay(formattedDate);
         const msg = {
           to: CAREGIVER_EMAIL,
           from: FROM_EMAIL,
-          subject: `Medicine Taken: ${medicineName}`,
-          html: getMedicineTakenEmailHTML(medicineName, medicineDosage, scheduledTime, formattedDate),
+          subject: `✅ Medicine Taken: ${medicineName}`,
+          html: getMedicineTakenEmailHTML(medicineName, medicineDosage, scheduledTime, displayDate),
         };
 
         await sgMail.send(msg);
-        console.log(`✅ Medicine taken email sent for ${medicineName} on ${formattedDate}`);
+        console.log(`✅ Medicine taken email sent for ${medicineName} (${medicineDosage}) at ${scheduledTime} on ${displayDate}`);
       }
 
       // Send email for "alert" status (not taken)
       if (status === "alert" && taken === false) {
+        const displayDate = formatDateForDisplay(formattedDate);
         const msg = {
           to: CAREGIVER_EMAIL,
           from: FROM_EMAIL,
-          subject: `ALERT: Missed Medicine - ${medicineName}`,
-          html: getMissedMedicineEmailHTML(medicineName, medicineDosage, scheduledTime, formattedDate),
+          subject: `⚠️ ALERT: Missed Medicine - ${medicineName}`,
+          html: getMissedMedicineEmailHTML(medicineName, medicineDosage, scheduledTime, displayDate),
         };
 
         await sgMail.send(msg);
-        console.log(`✅ Missed medicine alert email sent for ${medicineName} on ${formattedDate}`);
+        console.log(`✅ Missed medicine alert email sent for ${medicineName} (${medicineDosage}) at ${scheduledTime} on ${displayDate}`);
       }
 
       return null;
@@ -575,9 +663,11 @@ export const sendDailySummary = onSchedule(
   },
   async () => {
     try {
+      console.log("📊 Starting daily summary generation...");
+      
       // Check if environment variables are set
       if (!SENDGRID_KEY || !CAREGIVER_EMAIL) {
-        console.error("Missing environment variables for daily summary");
+        console.error("❌ Missing environment variables for daily summary");
         return;
       }
 
@@ -588,14 +678,19 @@ export const sendDailySummary = onSchedule(
       const today = new Date();
       const manilaTime = new Date(today.toLocaleString("en-US", {timeZone: "Asia/Manila"}));
       const dateString = manilaTime.toISOString().split("T")[0];
+      const displayDate = formatDateForDisplay(dateString);
+
+      console.log(`📅 Generating summary for: ${dateString} (${displayDate})`);
 
       // ✅ GET ALL MEDICINES FROM FIREBASE
       const allMedicines = await getAllMedicines();
       
       if (allMedicines.length === 0) {
-        console.log("No medicines configured, skipping daily summary");
+        console.log("⚠️ No medicines configured, skipping daily summary");
         return;
       }
+
+      console.log(`💊 Found ${allMedicines.length} configured medicines`);
 
       // Fetch medicine history for today
       const db = admin.database();
@@ -606,12 +701,16 @@ export const sendDailySummary = onSchedule(
         .once("value");
 
       const historyData = snapshot.val();
+      console.log("📜 History data for today:", historyData ? Object.keys(historyData).length + " records" : "No records");
 
       // ✅ BUILD SUMMARY DATA FROM ACTUAL MEDICINES AND THEIR SCHEDULES
       const summaryData: Array<{name: string; dosage: string; time: string; status: string; date: string}> = [];
       
       allMedicines.forEach(({slotId, medicine}) => {
-        const slotNumber = parseInt(slotId.split("_")[1]) + 1; // slot_0 -> 1, slot_1 -> 2, slot_2 -> 3
+        // Convert slot_0 -> 1, slot_1 -> 2, slot_2 -> 3
+        const slotNumber = parseInt(slotId.split("_")[1]) + 1;
+        
+        console.log(`Processing ${medicine.name} (${slotId} -> medicineId: ${slotNumber})`);
         
         medicine.schedules.forEach((schedule: any) => {
           const summaryItem = {
@@ -625,12 +724,14 @@ export const sendDailySummary = onSchedule(
           // Check if this schedule was taken today from history
           if (historyData) {
             Object.values(historyData).forEach((record: any) => {
+              // Match by medicineId and scheduleId
               if (record.medicineId === slotNumber.toString() && 
                   record.scheduleId === schedule.id) {
                 summaryItem.status = record.medicine_taken === true ? "TAKEN" : "NOT TAKEN";
                 if (record.date) {
                   summaryItem.date = formatDate(record.date);
                 }
+                console.log(`✓ Found history: ${medicine.name} at ${schedule.time} - ${summaryItem.status}`);
               }
             });
           }
@@ -640,16 +741,19 @@ export const sendDailySummary = onSchedule(
       });
 
       if (summaryData.length === 0) {
-        console.log("No schedules found for today, skipping daily summary");
+        console.log("⚠️ No schedules found for today, skipping daily summary");
         return;
       }
+
+      console.log(`📋 Summary prepared with ${summaryData.length} scheduled doses`);
+      console.log("Summary data:", JSON.stringify(summaryData, null, 2));
 
       // Send daily summary email
       const msg = {
         to: CAREGIVER_EMAIL,
         from: FROM_EMAIL,
-        subject: `Daily Medication Summary - ${dateString}`,
-        html: getDailySummaryEmailHTML(summaryData, dateString),
+        subject: `📊 Daily Medication Summary - ${displayDate}`,
+        html: getDailySummaryEmailHTML(summaryData, displayDate),
       };
 
       await sgMail.send(msg);
