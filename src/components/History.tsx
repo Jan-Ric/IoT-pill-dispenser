@@ -11,58 +11,35 @@ import {
   Trash2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
-
-interface HistoryRecord {
-  id: string;
-  name: string;
-  dosage: string;
-  scheduledTime: string;
-  takenTime: string;
-  date: string;
-  status: "taken" | "missed";
-}
+import { firebaseService } from "../services/firebaseService";
+import type { HistoryRecord } from "../services/firebaseService";
 
 function History() {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [filter, setFilter] = useState<"all" | "taken" | "missed">("all");
   const [dateFilter, setDateFilter] = useState<string>("all");
 
-  // Load history once on mount
+  // Load history from Firebase and listen to real-time updates
   useEffect(() => {
-    loadHistory();
+    // Listen to history changes in real-time
+    const unsubscribe = firebaseService.onHistoryChange((historyData) => {
+      setHistory(historyData);
+      console.log("History updated from Firebase:", historyData);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const loadHistory = () => {
-    try {
-      const stored = localStorage.getItem("medicineHistory");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setHistory(Array.isArray(parsed) ? parsed : []);
-        console.log("Loaded history from localStorage:", parsed);
-      } else {
-        setHistory([]);
-        console.log("No history found in localStorage");
-      }
-    } catch (error) {
-      console.error("Error loading history:", error);
-      setHistory([]);
-    }
-  };
-
-  // Refresh history every 3 seconds to catch new entries from Dashboard
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadHistory();
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const clearHistory = () => {
+  const clearHistory = async () => {
     if (confirm("Are you sure you want to clear all history?")) {
-      localStorage.removeItem("medicineHistory");
-      setHistory([]);
-      console.log("History cleared from localStorage and state");
+      try {
+        await firebaseService.clearHistory();
+        setHistory([]);
+        console.log("History cleared from Firebase");
+      } catch (error) {
+        console.error("Error clearing history:", error);
+        alert("Failed to clear history");
+      }
     }
   };
 
@@ -157,9 +134,7 @@ function History() {
 
     try {
       return filtered.sort((a, b) => {
-        const dateA = new Date(a.date + " " + a.takenTime).getTime();
-        const dateB = new Date(b.date + " " + b.takenTime).getTime();
-        return dateB - dateA;
+        return b.timestamp - a.timestamp;
       });
     } catch (error) {
       console.error("Error sorting history:", error);

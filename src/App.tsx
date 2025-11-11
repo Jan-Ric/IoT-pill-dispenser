@@ -4,38 +4,42 @@ import Dashboard from "./components/Dashboard";
 import HistoryComponent from "./components/History";
 import About from "./components/About";
 import Account from "./components/Account";
+import { getDatabase, ref, onValue } from "firebase/database";
+import { initializeApp } from "firebase/app";
 
 type Page = "dashboard" | "history" | "about" | "account";
 
-interface UserProfile {
-  fullName: string;
-  email: string;
-  phone: string;
-  location: string;
-}
+const firebaseConfig = {
+  apiKey: "AIzaSyDSwvmOYIJvi1yGUsptwjseRJlenYLJGzo",
+  authDomain: "meditrack-24ee5.firebaseapp.com",
+  databaseURL:
+    "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "meditrack-24ee5",
+  storageBucket: "meditrack-24ee5.appspot.com",
+  messagingSenderId: "1044793149591",
+  appId: "1:1044793149591:web:baceccc719e4dce0eb81d2",
+};
+
+const app = initializeApp(firebaseConfig);
+const database = getDatabase(app);
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("dashboard");
-  const [userName, setUserName] = useState<string>("Sylwia");
+  const [userName, setUserName] = useState<string>("User");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Load user name from localStorage and listen for changes
+  // Load user name from Firebase and listen for changes
   useEffect(() => {
-    const loadUserName = () => {
-      const storedProfile = localStorage.getItem("userProfile");
-      if (storedProfile) {
-        const profile: UserProfile = JSON.parse(storedProfile);
+    const userProfileRef = ref(database, "user_profile");
+
+    const unsubscribe = onValue(userProfileRef, (snapshot) => {
+      const profile = snapshot.val();
+      if (profile && profile.fullName) {
         setUserName(profile.fullName);
       }
-    };
+    });
 
-    // Load initially
-    loadUserName();
-
-    // Poll for changes every second to catch updates from Account page
-    const interval = setInterval(loadUserName, 1000);
-
-    return () => clearInterval(interval);
+    return () => unsubscribe();
   }, []);
 
   const renderPage = () => {

@@ -32,15 +32,7 @@ export interface MedicineSchedule {
   alertTime?: string;
 }
 
-export interface HistoryRecord {
-  id: string;
-  name: string;
-  dosage: string;
-  scheduledTime: string;
-  takenTime: string;
-  date: string;
-  status: 'taken' | 'missed';
-}
+
 
 export interface UserProfile {
   name: string;

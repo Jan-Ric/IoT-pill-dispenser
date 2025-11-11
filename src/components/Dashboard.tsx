@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { firebaseService } from "../services/firebaseService";
 import type { Medicine, Schedule } from "../types";
+import type { Alert } from "../services/firebaseService";
 
 interface FirebaseUpdate {
   medicineId?: string;
@@ -20,14 +21,6 @@ interface FirebaseUpdate {
   time?: string;
   datetime?: string;
   timestamp?: number;
-}
-
-interface Alert {
-  id: string;
-  type: "missed" | "connection" | "dispensed" | "taken";
-  message: string;
-  time: string;
-  timestamp: number;
 }
 
 function Dashboard() {
@@ -45,21 +38,28 @@ function Dashboard() {
   const isFirstLoad = useRef<boolean>(true);
   const connectionLostTime = useRef<number | null>(null);
 
-  // Load recent alerts from localStorage
+  // Load recent alerts from Firebase
   useEffect(() => {
-    const storedAlerts = localStorage.getItem("recentAlerts");
-    if (storedAlerts) {
-      setRecentAlerts(JSON.parse(storedAlerts));
-    }
+    const loadAlerts = async () => {
+      const alerts = await firebaseService.getAlerts();
+      setRecentAlerts(alerts);
+    };
+    loadAlerts();
+
+    // Listen to alerts changes in real-time
+    const unsubscribe = firebaseService.onAlertsChange((alerts) => {
+      setRecentAlerts(alerts);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  // Add alert to recent alerts
-  const addAlert = (
+  // Add alert to Firebase
+  const addAlert = async (
     type: "missed" | "connection" | "dispensed" | "taken",
     message: string
   ) => {
-    const newAlert: Alert = {
-      id: Date.now().toString(),
+    await firebaseService.addAlert({
       type,
       message,
       time: new Date().toLocaleTimeString("en-US", {
@@ -67,12 +67,6 @@ function Dashboard() {
         minute: "2-digit",
       }),
       timestamp: Date.now(),
-    };
-
-    setRecentAlerts((prev) => {
-      const updated = [newAlert, ...prev].slice(0, 5);
-      localStorage.setItem("recentAlerts", JSON.stringify(updated));
-      return updated;
     });
   };
 
@@ -191,7 +185,7 @@ function Dashboard() {
     };
   }, []);
 
-  const handleFirebaseUpdate = (data: FirebaseUpdate) => {
+  const handleFirebaseUpdate = async (data: FirebaseUpdate) => {
     const {
       medicineId,
       scheduleId,
@@ -219,6 +213,18 @@ function Dashboard() {
                   "taken",
                   `${med.name} (${sched.time}) taken at ${time}`
                 );
+
+                // Add to history
+                firebaseService.addHistoryRecord({
+                  name: med.name,
+                  dosage: med.dosage,
+                  scheduledTime: sched.time,
+                  takenTime: time,
+                  date: date,
+                  status: "taken",
+                  timestamp: Date.now(),
+                });
+
                 return {
                   ...sched,
                   dispensed: true,
@@ -227,6 +233,18 @@ function Dashboard() {
                 };
               } else if (status === "alert") {
                 addAlert("missed", `${med.name} (${sched.time}) at ${time}`);
+
+                // Add to history as missed
+                firebaseService.addHistoryRecord({
+                  name: med.name,
+                  dosage: med.dosage,
+                  scheduledTime: sched.time,
+                  takenTime: time,
+                  date: date,
+                  status: "missed",
+                  timestamp: Date.now(),
+                });
+
                 return {
                   ...sched,
                   dispensed: true,
@@ -293,7 +311,6 @@ function Dashboard() {
     // If not dispensed yet, send dispense command to Arduino
     if (!schedule.dispensed && !schedule.taken) {
       try {
-        // ✅ FIX: Send servo index (0, 1, 2) instead of slot ID
         const servoIndex = medicine.servoIndex.toString();
 
         console.log("Sending dispense command:", {
@@ -303,7 +320,6 @@ function Dashboard() {
           scheduledTime: schedule.time,
         });
 
-        // Send command directly to Firebase in the format Arduino expects
         await fetch(
           "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app/dispense_command.json",
           {
@@ -312,10 +328,10 @@ function Dashboard() {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              servoIndex: servoIndex, // "0", "1", or "2" for Arduino
-              medicineId: medicineId, // Keep for tracking which medicine
-              scheduleId: scheduleId, // Keep for tracking which schedule
-              scheduledTime: schedule.time, // Keep for reference
+              servoIndex: servoIndex,
+              medicineId: medicineId,
+              scheduleId: scheduleId,
+              scheduledTime: schedule.time,
               timestamp: timestamp,
             }),
           }
@@ -376,6 +392,17 @@ function Dashboard() {
           5
         )}`
       );
+
+      // Add to history
+      await firebaseService.addHistoryRecord({
+        name: medicine.name,
+        dosage: medicine.dosage,
+        scheduledTime: schedule.time,
+        takenTime: currentTime,
+        date: currentDate,
+        status: "taken",
+        timestamp: Date.now(),
+      });
 
       setNotification(`✓ ${medicine.name} (${schedule.time}) marked as taken`);
       setNotificationType("success");

@@ -1,7 +1,7 @@
 // src/services/firebaseService.ts
 
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, onValue, set, update, remove, Unsubscribe, get } from 'firebase/database';
+import { getDatabase, ref, onValue, set, update, remove, Unsubscribe, get, push } from 'firebase/database';
 import { FirebaseData, Medicine, SyncCommand } from '../types';
 
 const firebaseConfig = {
@@ -16,6 +16,25 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
+
+export interface HistoryRecord {
+  id: string;
+  name: string;
+  dosage: string;
+  scheduledTime: string;
+  takenTime: string;
+  date: string;
+  status: 'taken' | 'missed';
+  timestamp: number;
+}
+
+export interface Alert {
+  id: string;
+  type: 'missed' | 'connection' | 'dispensed' | 'taken';
+  message: string;
+  time: string;
+  timestamp: number;
+}
 
 export const firebaseService = {
   // ===== MEDICINE UPDATES (existing) =====
@@ -41,16 +60,14 @@ export const firebaseService = {
     set(dbRef, data);
   },
 
-  // ===== MEDICINE MANAGEMENT (new) =====
+  // ===== MEDICINE MANAGEMENT (existing) =====
   
-  // Get all medicines
   getMedicines: async (): Promise<Record<string, Medicine | null>> => {
     const dbRef = ref(database, 'medicines');
     const snapshot = await get(dbRef);
     return snapshot.val() || { slot_0: null, slot_1: null, slot_2: null };
   },
 
-  // Listen to medicines changes
   onMedicinesChange: (callback: (medicines: Record<string, Medicine | null>) => void): Unsubscribe => {
     const dbRef = ref(database, 'medicines');
     return onValue(dbRef, (snapshot) => {
@@ -59,27 +76,120 @@ export const firebaseService = {
     });
   },
 
-  // Save a medicine to a specific slot
   saveMedicine: async (slotId: string, medicine: Medicine) => {
     const dbRef = ref(database, `medicines/${slotId}`);
     await set(dbRef, medicine);
   },
 
-  // Delete a medicine from a slot
   deleteMedicine: async (slotId: string) => {
     const dbRef = ref(database, `medicines/${slotId}`);
     await set(dbRef, null);
   },
 
-  // Update all medicines at once
   updateAllMedicines: async (medicines: Record<string, Medicine | null>) => {
     const dbRef = ref(database, 'medicines');
     await set(dbRef, medicines);
   },
 
-  // ===== SYNC COMMAND =====
+  // ===== HISTORY MANAGEMENT (NEW) =====
   
-  // Send sync command to Arduino
+  // Add a history record
+  addHistoryRecord: async (record: Omit<HistoryRecord, 'id'>) => {
+    const dbRef = ref(database, 'medicine_history');
+    const newRecordRef = push(dbRef);
+    await set(newRecordRef, {
+      ...record,
+      id: newRecordRef.key
+    });
+  },
+
+  // Get all history records
+  getHistory: async (): Promise<HistoryRecord[]> => {
+    const dbRef = ref(database, 'medicine_history');
+    const snapshot = await get(dbRef);
+    const data = snapshot.val();
+    if (!data) return [];
+    
+    const records: HistoryRecord[] = [];
+    Object.values(data).forEach((value: any) => {
+      if (value && typeof value === 'object') {
+        records.push(value as HistoryRecord);
+      }
+    });
+    
+    return records.sort((a, b) => b.timestamp - a.timestamp);
+  },
+
+  // Listen to history changes
+  onHistoryChange: (callback: (history: HistoryRecord[]) => void): Unsubscribe => {
+    const dbRef = ref(database, 'medicine_history');
+    return onValue(dbRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data) {
+        callback([]);
+        return;
+      }
+      
+      const records: HistoryRecord[] = [];
+      Object.values(data).forEach((value: any) => {
+        if (value && typeof value === 'object') {
+          records.push(value as HistoryRecord);
+        }
+      });
+      
+      const sortedRecords = records.sort((a, b) => b.timestamp - a.timestamp);
+      callback(sortedRecords);
+    });
+  },
+
+  // Clear all history
+  clearHistory: async () => {
+    const dbRef = ref(database, 'medicine_history');
+    await set(dbRef, null);
+  },
+
+  // ===== ALERTS MANAGEMENT (NEW) =====
+  
+  // Add an alert
+  addAlert: async (alert: Omit<Alert, 'id'>) => {
+    const dbRef = ref(database, 'recent_alerts');
+    const snapshot = await get(dbRef);
+    const currentAlerts = snapshot.val() || [];
+    
+    const newAlert: Alert = {
+      ...alert,
+      id: Date.now().toString()
+    };
+    
+    // Keep only the last 10 alerts
+    const updatedAlerts = [newAlert, ...currentAlerts].slice(0, 10);
+    await set(dbRef, updatedAlerts);
+  },
+
+  // Get recent alerts
+  getAlerts: async (): Promise<Alert[]> => {
+    const dbRef = ref(database, 'recent_alerts');
+    const snapshot = await get(dbRef);
+    return snapshot.val() || [];
+  },
+
+  // Listen to alerts changes
+  onAlertsChange: (callback: (alerts: Alert[]) => void): Unsubscribe => {
+    const dbRef = ref(database, 'recent_alerts');
+    return onValue(dbRef, (snapshot) => {
+      const data = snapshot.val();
+      callback(data || []);
+    });
+  },
+
+  // Clear alerts
+  clearAlerts: async () => {
+    const dbRef = ref(database, 'recent_alerts');
+    await set(dbRef, []);
+  },
+
+  // ===== SYNC COMMAND (existing) =====
+  
   sendSyncCommand: async () => {
     const dbRef = ref(database, 'sync_command');
     await set(dbRef, {
@@ -88,7 +198,6 @@ export const firebaseService = {
     });
   },
 
-  // Clear sync command
   clearSyncCommand: async () => {
     const dbRef = ref(database, 'sync_command');
     await set(dbRef, {
@@ -97,7 +206,6 @@ export const firebaseService = {
     });
   },
 
-  // Listen to sync command changes
   onSyncCommand: (callback: (command: SyncCommand) => void): Unsubscribe => {
     const dbRef = ref(database, 'sync_command');
     return onValue(dbRef, (snapshot) => {
@@ -108,7 +216,7 @@ export const firebaseService = {
     });
   },
 
-  // ===== DISPENSE COMMAND (existing, enhanced) =====
+  // ===== DISPENSE COMMAND (existing) =====
   
   sendDispenseCommand: async (medicineId: string, scheduleId: string) => {
     const dbRef = ref(database, 'dispense_command');
@@ -124,7 +232,7 @@ export const firebaseService = {
     await remove(dbRef);
   },
 
-  // ===== TESTING =====
+  // ===== TESTING (existing) =====
   
   simulateArduinoUpdate: (medicineId: string, scheduleId: string, taken: boolean, time: string) => {
     const dbRef = ref(database, 'medicine_updates');
