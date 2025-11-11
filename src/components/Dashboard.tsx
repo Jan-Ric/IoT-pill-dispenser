@@ -293,7 +293,35 @@ function Dashboard() {
     // If not dispensed yet, send dispense command to Arduino
     if (!schedule.dispensed && !schedule.taken) {
       try {
-        await firebaseService.sendDispenseCommand(medicineId, scheduleId);
+        // ✅ FIX: Send servo index (0, 1, 2) instead of slot ID
+        const servoIndex = medicine.servoIndex.toString();
+
+        console.log("Sending dispense command:", {
+          servoIndex,
+          medicineId,
+          scheduleId,
+          scheduledTime: schedule.time,
+        });
+
+        // Send command directly to Firebase in the format Arduino expects
+        await fetch(
+          "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app/dispense_command.json",
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              servoIndex: servoIndex, // "0", "1", or "2" for Arduino
+              medicineId: medicineId, // Keep for tracking which medicine
+              scheduleId: scheduleId, // Keep for tracking which schedule
+              scheduledTime: schedule.time, // Keep for reference
+              timestamp: timestamp,
+            }),
+          }
+        );
+
+        console.log("✅ Dispense command sent successfully");
 
         setNotification(
           `💊 Dispense command sent for ${medicine.name} (${schedule.time})...`
@@ -302,7 +330,7 @@ function Dashboard() {
         setTimeout(() => setNotification(""), 3000);
         return;
       } catch (error) {
-        console.error("Error sending dispense command:", error);
+        console.error("❌ Error sending dispense command:", error);
         setNotification(`❌ Error sending dispense command`);
         setNotificationType("error");
         setTimeout(() => setNotification(""), 3000);
