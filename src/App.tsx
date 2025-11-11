@@ -42,8 +42,12 @@ function App() {
   const [userName, setUserName] = useState<string>("User");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Lifted state from Dashboard
-  const [medicines, setMedicines] = useState<Medicine[]>([]);
+  // Lifted state from Dashboard - CHANGED TO OBJECT
+  const [medicines, setMedicines] = useState<Record<string, Medicine | null>>({
+    slot_0: null,
+    slot_1: null,
+    slot_2: null,
+  });
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [recentAlerts, setRecentAlerts] = useState<Alert[]>([]);
@@ -66,25 +70,6 @@ function App() {
 
     return () => unsubscribe();
   }, []);
-
-  // Load medicines from localStorage on mount
-  useEffect(() => {
-    const savedMedicines = localStorage.getItem("meditrack_medicines");
-    if (savedMedicines) {
-      try {
-        setMedicines(JSON.parse(savedMedicines));
-      } catch (error) {
-        console.error("Error loading medicines from localStorage:", error);
-      }
-    }
-  }, []);
-
-  // Save medicines to localStorage whenever they change
-  useEffect(() => {
-    if (medicines.length > 0) {
-      localStorage.setItem("meditrack_medicines", JSON.stringify(medicines));
-    }
-  }, [medicines]);
 
   // Load recent alerts from Firebase
   useEffect(() => {
@@ -144,12 +129,11 @@ function App() {
     setIsLoading(true);
     try {
       const medicinesData = await firebaseService.getMedicines();
-      const loadedMedicines = Object.values(medicinesData).filter(
-        (m): m is Medicine => m !== null
+      setMedicines(
+        medicinesData || { slot_0: null, slot_1: null, slot_2: null }
       );
-      setMedicines(loadedMedicines);
       setIsConnected(true);
-      console.log("Loaded medicines from Firebase:", loadedMedicines);
+      console.log("Loaded medicines from Firebase:", medicinesData);
     } catch (error) {
       console.error("Error loading medicines:", error);
       setIsConnected(false);
@@ -168,11 +152,10 @@ function App() {
       // Listen to medicines structure changes (add/remove/edit medicines)
       medicinesUnsubscribe = firebaseService.onMedicinesChange(
         (medicinesData) => {
-          const meds = Object.values(medicinesData).filter(
-            (m): m is Medicine => m !== null
+          setMedicines(
+            medicinesData || { slot_0: null, slot_1: null, slot_2: null }
           );
-          setMedicines(meds);
-          console.log("Medicines updated:", meds);
+          console.log("Medicines updated:", medicinesData);
         }
       );
 
@@ -241,70 +224,73 @@ function App() {
     } = data;
 
     setMedicines((prev) => {
-      const updated = prev.map((med) => {
-        if (med.id === medicineId) {
-          const updatedSchedules = med.schedules.map((sched) => {
-            if (sched.id === scheduleId) {
-              if (status === "dispensed") {
-                addAlert("dispensed", `${med.name} (${sched.time}) dispensed`);
-                return {
-                  ...sched,
-                  dispensed: true,
-                  taken: false,
-                  alert: false,
-                };
-              } else if (status === "taken") {
-                addAlert(
-                  "taken",
-                  `${med.name} (${sched.time}) taken at ${time}`
-                );
+      const updated = { ...prev };
 
-                // Add to history
-                firebaseService.addHistoryRecord({
-                  name: med.name,
-                  dosage: med.dosage,
-                  scheduledTime: sched.time,
-                  takenTime: time,
-                  date: date,
-                  status: "taken",
-                  timestamp: Date.now(),
-                });
+      // Find the slot that contains this medicine
+      const slotKey = Object.keys(prev).find(
+        (key) => prev[key]?.id === medicineId
+      );
 
-                return {
-                  ...sched,
-                  dispensed: true,
-                  taken: true,
-                  alert: false,
-                };
-              } else if (status === "alert") {
-                addAlert("missed", `${med.name} (${sched.time}) at ${time}`);
+      if (slotKey && updated[slotKey]) {
+        const med = updated[slotKey]!;
 
-                // Add to history as missed
-                firebaseService.addHistoryRecord({
-                  name: med.name,
-                  dosage: med.dosage,
-                  scheduledTime: sched.time,
-                  takenTime: time,
-                  date: date,
-                  status: "missed",
-                  timestamp: Date.now(),
-                });
+        const updatedSchedules = med.schedules.map((sched) => {
+          if (sched.id === scheduleId) {
+            if (status === "dispensed") {
+              addAlert("dispensed", `${med.name} (${sched.time}) dispensed`);
+              return {
+                ...sched,
+                dispensed: true,
+                taken: false,
+                alert: false,
+              };
+            } else if (status === "taken") {
+              addAlert("taken", `${med.name} (${sched.time}) taken at ${time}`);
 
-                return {
-                  ...sched,
-                  dispensed: true,
-                  taken: false,
-                  alert: true,
-                };
-              }
+              // Add to history
+              firebaseService.addHistoryRecord({
+                name: med.name,
+                dosage: med.dosage,
+                scheduledTime: sched.time,
+                takenTime: time,
+                date: date,
+                status: "taken",
+                timestamp: Date.now(),
+              });
+
+              return {
+                ...sched,
+                dispensed: true,
+                taken: true,
+                alert: false,
+              };
+            } else if (status === "alert") {
+              addAlert("missed", `${med.name} (${sched.time}) at ${time}`);
+
+              // Add to history as missed
+              firebaseService.addHistoryRecord({
+                name: med.name,
+                dosage: med.dosage,
+                scheduledTime: sched.time,
+                takenTime: time,
+                date: date,
+                status: "missed",
+                timestamp: Date.now(),
+              });
+
+              return {
+                ...sched,
+                dispensed: true,
+                taken: false,
+                alert: true,
+              };
             }
-            return sched;
-          });
+          }
+          return sched;
+        });
 
-          return { ...med, schedules: updatedSchedules };
-        }
-        return med;
-      });
+        updated[slotKey] = { ...med, schedules: updatedSchedules };
+      }
 
       setLastUpdate(datetime);
       return updated;

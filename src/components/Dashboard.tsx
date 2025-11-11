@@ -8,13 +8,36 @@ import {
   WifiOff,
   RefreshCw,
 } from "lucide-react";
-import { firebaseService } from "../services/firebaseService";
-import type { Medicine } from "../types";
-import type { Alert } from "../services/firebaseService";
+
+interface Schedule {
+  id: string;
+  time: string;
+  dispensed: boolean;
+  taken: boolean;
+  alert: boolean;
+}
+
+interface Medicine {
+  id: string;
+  name: string;
+  dosage: string;
+  servoIndex: number;
+  schedules: Schedule[];
+}
+
+interface Alert {
+  id: string;
+  type: string;
+  message: string;
+  time: string;
+  timestamp: number;
+}
 
 interface DashboardProps {
-  medicines: Medicine[];
-  setMedicines: React.Dispatch<React.SetStateAction<Medicine[]>>;
+  medicines: Record<string, Medicine | null>;
+  setMedicines: React.Dispatch<
+    React.SetStateAction<Record<string, Medicine | null>>
+  >;
   lastUpdate: string;
   isConnected: boolean;
   recentAlerts: Alert[];
@@ -40,12 +63,20 @@ function Dashboard({
   const [notificationType, setNotificationType] = useState<
     "success" | "warning" | "error"
   >("success");
+  const [dispensingSchedule, setDispensingSchedule] = useState<string | null>(
+    null
+  );
+
+  // Convert medicines object to array for easier iteration
+  const medicinesArray = Object.values(medicines).filter(
+    (m): m is Medicine => m !== null
+  );
 
   const handleScheduleToggle = async (
     medicineId: string,
     scheduleId: string
   ) => {
-    const medicine = medicines.find((m) => m.id === medicineId);
+    const medicine = medicinesArray.find((m) => m.id === medicineId);
     if (!medicine) return;
 
     const schedule = medicine.schedules.find((s) => s.id === scheduleId);
@@ -53,19 +84,21 @@ function Dashboard({
 
     const timestamp = Math.floor(Date.now() / 1000);
 
-    // If not dispensed yet, send dispense command to Arduino
+    // ===== DISPENSE COMMAND (Not dispensed yet) =====
     if (!schedule.dispensed && !schedule.taken) {
       try {
+        setDispensingSchedule(scheduleId);
         const servoIndex = medicine.servoIndex.toString();
 
-        console.log("Sending dispense command:", {
+        console.log("🚀 Sending dispense command:", {
           servoIndex,
           medicineId,
           scheduleId,
           scheduledTime: schedule.time,
+          timestamp,
         });
 
-        await fetch(
+        const response = await fetch(
           "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app/dispense_command.json",
           {
             method: "PUT",
@@ -82,24 +115,35 @@ function Dashboard({
           }
         );
 
+        if (!response.ok) {
+          throw new Error("Failed to send dispense command");
+        }
+
         console.log("✅ Dispense command sent successfully");
 
         setNotification(
-          `💊 Dispense command sent for ${medicine.name} (${schedule.time})...`
+          `💊 Dispense command sent for ${medicine.name} (${schedule.time}). Arduino is processing...`
         );
         setNotificationType("success");
-        setTimeout(() => setNotification(""), 3000);
+        setTimeout(() => {
+          setNotification("");
+          setDispensingSchedule(null);
+        }, 5000);
+
         return;
-      } catch (error) {
+      } catch (error: any) {
         console.error("❌ Error sending dispense command:", error);
-        setNotification(`❌ Error sending dispense command`);
+        setNotification(`❌ Error sending dispense command: ${error.message}`);
         setNotificationType("error");
-        setTimeout(() => setNotification(""), 3000);
+        setTimeout(() => {
+          setNotification("");
+          setDispensingSchedule(null);
+        }, 3000);
         return;
       }
     }
 
-    // Manual marking as taken
+    // ===== MANUAL MARK AS TAKEN (Dispensed but not taken) =====
     else if (schedule.dispensed && !schedule.taken) {
       const currentTime = new Date().toLocaleTimeString("en-US", {
         hour: "2-digit",
@@ -108,27 +152,29 @@ function Dashboard({
       });
       const currentDate = new Date().toLocaleDateString("en-US");
 
-      setMedicines((prev) =>
-        prev.map((med) => {
-          if (med.id === medicineId) {
-            return {
-              ...med,
-              schedules: med.schedules.map((sched) => {
-                if (sched.id === scheduleId) {
-                  return {
-                    ...sched,
-                    dispensed: true,
-                    taken: true,
-                    alert: false,
-                  };
-                }
-                return sched;
-              }),
-            };
-          }
-          return med;
-        })
-      );
+      setMedicines((prev) => {
+        const updated = { ...prev };
+        const slotKey = Object.keys(prev).find(
+          (key) => prev[key]?.id === medicineId
+        );
+        if (slotKey && updated[slotKey]) {
+          updated[slotKey] = {
+            ...updated[slotKey]!,
+            schedules: updated[slotKey]!.schedules.map((sched) => {
+              if (sched.id === scheduleId) {
+                return {
+                  ...sched,
+                  dispensed: true,
+                  taken: true,
+                  alert: false,
+                };
+              }
+              return sched;
+            }),
+          };
+        }
+        return updated;
+      });
 
       addAlert(
         "taken",
@@ -137,17 +183,6 @@ function Dashboard({
           5
         )}`
       );
-
-      // Add to history
-      await firebaseService.addHistoryRecord({
-        name: medicine.name,
-        dosage: medicine.dosage,
-        scheduledTime: schedule.time,
-        takenTime: currentTime,
-        date: currentDate,
-        status: "taken",
-        timestamp: Date.now(),
-      });
 
       setNotification(`✓ ${medicine.name} (${schedule.time}) marked as taken`);
       setNotificationType("success");
@@ -179,29 +214,31 @@ function Dashboard({
       }
     }
 
-    // Reset
+    // ===== RESET (Already taken) =====
     else {
-      setMedicines((prev) =>
-        prev.map((med) => {
-          if (med.id === medicineId) {
-            return {
-              ...med,
-              schedules: med.schedules.map((sched) => {
-                if (sched.id === scheduleId) {
-                  return {
-                    ...sched,
-                    dispensed: false,
-                    taken: false,
-                    alert: false,
-                  };
-                }
-                return sched;
-              }),
-            };
-          }
-          return med;
-        })
-      );
+      setMedicines((prev) => {
+        const updated = { ...prev };
+        const slotKey = Object.keys(prev).find(
+          (key) => prev[key]?.id === medicineId
+        );
+        if (slotKey && updated[slotKey]) {
+          updated[slotKey] = {
+            ...updated[slotKey]!,
+            schedules: updated[slotKey]!.schedules.map((sched) => {
+              if (sched.id === scheduleId) {
+                return {
+                  ...sched,
+                  dispensed: false,
+                  taken: false,
+                  alert: false,
+                };
+              }
+              return sched;
+            }),
+          };
+        }
+        return updated;
+      });
 
       setNotification(`${medicine.name} (${schedule.time}) reset`);
       setNotificationType("success");
@@ -210,17 +247,23 @@ function Dashboard({
   };
 
   const resetAllSchedules = () => {
-    setMedicines((prev) =>
-      prev.map((med) => ({
-        ...med,
-        schedules: med.schedules.map((sched) => ({
-          ...sched,
-          taken: false,
-          dispensed: false,
-          alert: false,
-        })),
-      }))
-    );
+    setMedicines((prev) => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach((key) => {
+        if (updated[key]) {
+          updated[key] = {
+            ...updated[key]!,
+            schedules: updated[key]!.schedules.map((sched) => ({
+              ...sched,
+              taken: false,
+              dispensed: false,
+              alert: false,
+            })),
+          };
+        }
+      });
+      return updated;
+    });
 
     setNotification("✓ All schedules reset");
     setNotificationType("success");
@@ -233,7 +276,7 @@ function Dashboard({
     let alertSchedules = 0;
     let pendingSchedules = 0;
 
-    medicines.forEach((med) => {
+    medicinesArray.forEach((med) => {
       med.schedules.forEach((sched) => {
         totalSchedules++;
         if (sched.taken) takenSchedules++;
@@ -328,7 +371,8 @@ function Dashboard({
           </p>
           <p className="text-4xl font-bold text-gray-800">{stats.total}</p>
           <p className="text-xs text-gray-500 mt-2">
-            {medicines.length} medicine{medicines.length !== 1 ? "s" : ""}
+            {medicinesArray.length} medicine
+            {medicinesArray.length !== 1 ? "s" : ""}
           </p>
         </div>
 
@@ -418,7 +462,7 @@ function Dashboard({
           </div>
         </div>
 
-        {medicines.length === 0 ? (
+        {medicinesArray.length === 0 ? (
           <div className="text-center py-12">
             <Pill className="w-16 h-16 text-gray-300 mx-auto mb-4" />
             <p className="text-gray-500 mb-2">No medicines found</p>
@@ -428,7 +472,7 @@ function Dashboard({
           </div>
         ) : (
           <div className="space-y-4">
-            {medicines.map((medicine) => (
+            {medicinesArray.map((medicine) => (
               <div
                 key={medicine.id}
                 className="rounded-2xl p-5 border-2 border-gray-100 bg-white hover:border-gray-200 transition-all"
@@ -454,79 +498,93 @@ function Dashboard({
 
                 {/* Schedules */}
                 <div className="space-y-2 ml-13">
-                  {medicine.schedules.map((schedule) => (
-                    <div
-                      key={schedule.id}
-                      className={`rounded-xl p-3 flex items-center justify-between border-2 transition-all ${
-                        schedule.alert
-                          ? "border-rose-200 bg-rose-50"
-                          : schedule.taken
-                          ? "border-teal-200 bg-teal-50"
-                          : schedule.dispensed
-                          ? "border-amber-200 bg-amber-50"
-                          : "border-gray-100 bg-gray-50"
-                      }`}
-                    >
-                      <div className="flex items-center space-x-3">
-                        <Clock
-                          className={`w-4 h-4 ${
-                            schedule.alert
-                              ? "text-rose-600"
-                              : schedule.taken
-                              ? "text-teal-600"
-                              : schedule.dispensed
-                              ? "text-amber-600"
-                              : "text-gray-400"
-                          }`}
-                        />
-                        <div>
-                          <p className="font-semibold text-gray-800 text-sm">
-                            {schedule.time}
-                          </p>
-                          {schedule.alert && (
-                            <p className="text-xs text-rose-600 font-medium">
-                              ⚠️ Not taken
-                            </p>
-                          )}
-                          {schedule.taken && (
-                            <p className="text-xs text-teal-600 font-medium">
-                              ✓ Taken
-                            </p>
-                          )}
-                          {schedule.dispensed &&
-                            !schedule.taken &&
-                            !schedule.alert && (
-                              <p className="text-xs text-amber-600 font-medium">
-                                ⏳ Dispensed
-                              </p>
-                            )}
-                        </div>
-                      </div>
+                  {medicine.schedules.map((schedule) => {
+                    const isDispensing = dispensingSchedule === schedule.id;
 
-                      <button
-                        onClick={() =>
-                          handleScheduleToggle(medicine.id, schedule.id)
-                        }
-                        className={`px-4 py-1.5 rounded-lg font-medium transition-all text-xs ${
+                    return (
+                      <div
+                        key={schedule.id}
+                        className={`rounded-xl p-3 flex items-center justify-between border-2 transition-all ${
                           schedule.alert
-                            ? "bg-rose-500 text-white hover:bg-rose-600"
+                            ? "border-rose-200 bg-rose-50"
                             : schedule.taken
-                            ? "bg-teal-500 text-white hover:bg-teal-600"
+                            ? "border-teal-200 bg-teal-50"
                             : schedule.dispensed
-                            ? "bg-amber-500 text-white hover:bg-amber-600"
-                            : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                            ? "border-amber-200 bg-amber-50"
+                            : "border-gray-100 bg-gray-50"
                         }`}
                       >
-                        {schedule.alert
-                          ? "Alert"
-                          : schedule.taken
-                          ? "Taken"
-                          : schedule.dispensed
-                          ? "Mark Taken"
-                          : "Dispense"}
-                      </button>
-                    </div>
-                  ))}
+                        <div className="flex items-center space-x-3">
+                          <Clock
+                            className={`w-4 h-4 ${
+                              schedule.alert
+                                ? "text-rose-600"
+                                : schedule.taken
+                                ? "text-teal-600"
+                                : schedule.dispensed
+                                ? "text-amber-600"
+                                : "text-gray-400"
+                            }`}
+                          />
+                          <div>
+                            <p className="font-semibold text-gray-800 text-sm">
+                              {schedule.time}
+                            </p>
+                            {schedule.alert && (
+                              <p className="text-xs text-rose-600 font-medium">
+                                ⚠️ Not taken
+                              </p>
+                            )}
+                            {schedule.taken && (
+                              <p className="text-xs text-teal-600 font-medium">
+                                ✓ Taken
+                              </p>
+                            )}
+                            {schedule.dispensed &&
+                              !schedule.taken &&
+                              !schedule.alert && (
+                                <p className="text-xs text-amber-600 font-medium">
+                                  {isDispensing
+                                    ? "⏳ Dispensing..."
+                                    : "⏳ Dispensed"}
+                                </p>
+                              )}
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            handleScheduleToggle(medicine.id, schedule.id)
+                          }
+                          disabled={isDispensing}
+                          className={`px-4 py-1.5 rounded-lg font-medium transition-all text-xs flex items-center space-x-1 ${
+                            schedule.alert
+                              ? "bg-rose-500 text-white hover:bg-rose-600"
+                              : schedule.taken
+                              ? "bg-teal-500 text-white hover:bg-teal-600"
+                              : schedule.dispensed
+                              ? "bg-amber-500 text-white hover:bg-amber-600"
+                              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        >
+                          {isDispensing && (
+                            <RefreshCw className="w-3 h-3 animate-spin mr-1" />
+                          )}
+                          <span>
+                            {schedule.alert
+                              ? "Alert"
+                              : schedule.taken
+                              ? "Taken"
+                              : schedule.dispensed
+                              ? isDispensing
+                                ? "Dispensing..."
+                                : "Mark Taken"
+                              : "Dispense"}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}

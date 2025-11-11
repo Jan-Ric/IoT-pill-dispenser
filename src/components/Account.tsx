@@ -81,20 +81,6 @@ function Account() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load profile from localStorage on mount
-  useEffect(() => {
-    const savedProfile = localStorage.getItem("userProfile");
-    if (savedProfile) {
-      try {
-        const parsed = JSON.parse(savedProfile);
-        setProfile(parsed);
-        setOriginalProfile(parsed);
-      } catch (error) {
-        console.error("Error loading profile:", error);
-      }
-    }
-  }, []);
-
   // Load medicines from Firebase
   useEffect(() => {
     const loadMedicines = async () => {
@@ -128,15 +114,12 @@ function Account() {
   const saveProfile = () => {
     setIsEditingProfile(false);
     setOriginalProfile(profile);
-    // Save to localStorage
-    localStorage.setItem("userProfile", JSON.stringify(profile));
     setProfileNotification("✓ Profile updated successfully!");
     setTimeout(() => setProfileNotification(""), 3000);
   };
 
   const cancelProfileEdit = () => {
     setIsEditingProfile(false);
-    // Revert to original profile
     setProfile(originalProfile);
   };
 
