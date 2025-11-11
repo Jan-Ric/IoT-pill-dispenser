@@ -17,22 +17,8 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { firebaseService } from "../services/firebaseService";
-import { getDatabase, ref, set, get } from "firebase/database";
-import { initializeApp } from "firebase/app";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyDSwvmOYIJvi1yGUsptwjseRJlenYLJGzo",
-  authDomain: "meditrack-24ee5.firebaseapp.com",
-  databaseURL:
-    "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "meditrack-24ee5",
-  storageBucket: "meditrack-24ee5.appspot.com",
-  messagingSenderId: "1044793149591",
-  appId: "1:1044793149591:web:baceccc719e4dce0eb81d2",
-};
-
-const app = initializeApp(firebaseConfig, "account-app");
-const database = getDatabase(app);
+import { ref, set, get } from "firebase/database";
+import { database } from "../services/firebaseService";
 
 interface Schedule {
   id: string;

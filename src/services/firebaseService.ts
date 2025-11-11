@@ -14,8 +14,8 @@ const firebaseConfig = {
   appId: "1:1044793149591:web:baceccc719e4dce0eb81d2"
 };
 
-const app = initializeApp(firebaseConfig);
-const database = getDatabase(app);
+export const app = initializeApp(firebaseConfig);
+export const database = getDatabase(app);
 
 export interface HistoryRecord {
   id: string;

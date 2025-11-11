@@ -4,11 +4,11 @@ import Dashboard from "./components/Dashboard";
 import HistoryComponent from "./components/History";
 import About from "./components/About";
 import Account from "./components/Account";
-import { getDatabase, ref, onValue } from "firebase/database";
-import { initializeApp } from "firebase/app";
 import { firebaseService } from "./services/firebaseService";
 import type { Medicine } from "./types";
 import type { Alert } from "./services/firebaseService";
+import { ref, onValue } from "firebase/database";
+import { database } from "./services/firebaseService";
 
 type Page = "dashboard" | "history" | "about" | "account";
 
@@ -22,20 +22,6 @@ interface FirebaseUpdate {
   datetime?: string;
   timestamp?: number;
 }
-
-const firebaseConfig = {
-  apiKey: "AIzaSyDSwvmOYIJvi1yGUsptwjseRJlenYLJGzo",
-  authDomain: "meditrack-24ee5.firebaseapp.com",
-  databaseURL:
-    "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "meditrack-24ee5",
-  storageBucket: "meditrack-24ee5.appspot.com",
-  messagingSenderId: "1044793149591",
-  appId: "1:1044793149591:web:baceccc719e4dce0eb81d2",
-};
-
-const app = initializeApp(firebaseConfig);
-const database = getDatabase(app);
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("dashboard");
