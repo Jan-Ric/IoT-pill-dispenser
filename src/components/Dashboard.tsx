@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useState } from "react";
 import {
   Pill,
   Clock,
@@ -9,292 +9,37 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { firebaseService } from "../services/firebaseService";
-import type { Medicine, Schedule } from "../types";
+import type { Medicine } from "../types";
 import type { Alert } from "../services/firebaseService";
 
-interface FirebaseUpdate {
-  medicineId?: string;
-  scheduleId?: string;
-  medicine_taken?: boolean;
-  status?: string;
-  date?: string;
-  time?: string;
-  datetime?: string;
-  timestamp?: number;
+interface DashboardProps {
+  medicines: Medicine[];
+  setMedicines: React.Dispatch<React.SetStateAction<Medicine[]>>;
+  lastUpdate: string;
+  isConnected: boolean;
+  recentAlerts: Alert[];
+  isLoading: boolean;
+  loadMedicines: () => Promise<void>;
+  addAlert: (
+    type: "missed" | "connection" | "dispensed" | "taken",
+    message: string
+  ) => Promise<void>;
 }
 
-function Dashboard() {
-  const [medicines, setMedicines] = useState<Medicine[]>([]);
-  const [lastUpdate, setLastUpdate] = useState<string>("");
-  const [isConnected, setIsConnected] = useState<boolean>(false);
+function Dashboard({
+  medicines,
+  setMedicines,
+  lastUpdate,
+  isConnected,
+  recentAlerts,
+  isLoading,
+  loadMedicines,
+  addAlert,
+}: DashboardProps) {
   const [notification, setNotification] = useState<string>("");
   const [notificationType, setNotificationType] = useState<
     "success" | "warning" | "error"
   >("success");
-  const [recentAlerts, setRecentAlerts] = useState<Alert[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-
-  const lastProcessedTimestamp = useRef<number>(0);
-  const isFirstLoad = useRef<boolean>(true);
-  const connectionLostTime = useRef<number | null>(null);
-
-  // Load recent alerts from Firebase
-  useEffect(() => {
-    const loadAlerts = async () => {
-      const alerts = await firebaseService.getAlerts();
-      setRecentAlerts(alerts);
-    };
-    loadAlerts();
-
-    // Listen to alerts changes in real-time
-    const unsubscribe = firebaseService.onAlertsChange((alerts) => {
-      setRecentAlerts(alerts);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  // Add alert to Firebase
-  const addAlert = async (
-    type: "missed" | "connection" | "dispensed" | "taken",
-    message: string
-  ) => {
-    await firebaseService.addAlert({
-      type,
-      message,
-      time: new Date().toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-      timestamp: Date.now(),
-    });
-  };
-
-  // Monitor connection status
-  useEffect(() => {
-    if (!isConnected && connectionLostTime.current === null) {
-      connectionLostTime.current = Date.now();
-    } else if (isConnected && connectionLostTime.current !== null) {
-      const disconnectedDuration = Date.now() - connectionLostTime.current;
-      const minutes = Math.floor(disconnectedDuration / 60000);
-      if (minutes > 0) {
-        addAlert(
-          "connection",
-          `Connection lost for ${minutes} min${minutes > 1 ? "s" : ""}`
-        );
-      }
-      connectionLostTime.current = null;
-    }
-  }, [isConnected]);
-
-  // Load medicines from Firebase on mount
-  useEffect(() => {
-    loadMedicines();
-  }, []);
-
-  const loadMedicines = async () => {
-    setIsLoading(true);
-    try {
-      const medicinesData = await firebaseService.getMedicines();
-      const loadedMedicines = Object.values(medicinesData).filter(
-        (m): m is Medicine => m !== null
-      );
-      setMedicines(loadedMedicines);
-      setIsConnected(true);
-      console.log("Loaded medicines from Firebase:", loadedMedicines);
-    } catch (error) {
-      console.error("Error loading medicines:", error);
-      setIsConnected(false);
-      setNotification("❌ Failed to load medicines from Firebase");
-      setNotificationType("error");
-      setTimeout(() => setNotification(""), 3000);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Firebase listener for medicine updates
-  useEffect(() => {
-    setIsConnected(true);
-    let unsubscribe: (() => void) | null = null;
-    let medicinesUnsubscribe: (() => void) | null = null;
-
-    try {
-      // Listen to medicines structure changes (add/remove/edit medicines)
-      medicinesUnsubscribe = firebaseService.onMedicinesChange(
-        (medicinesData) => {
-          const meds = Object.values(medicinesData).filter(
-            (m): m is Medicine => m !== null
-          );
-          setMedicines(meds);
-          console.log("Medicines updated:", meds);
-        }
-      );
-
-      // Listen to medicine_updates for real-time status changes (taken/dispensed/alert)
-      unsubscribe = firebaseService.onValue((data: FirebaseUpdate) => {
-        console.log("Firebase update received:", data);
-
-        if (isFirstLoad.current) {
-          console.log("First load - ignoring initial Firebase snapshot");
-          isFirstLoad.current = false;
-
-          if (data.timestamp) {
-            lastProcessedTimestamp.current = data.timestamp;
-          }
-          return;
-        }
-
-        if (
-          data.timestamp &&
-          data.timestamp <= lastProcessedTimestamp.current
-        ) {
-          console.log("Duplicate or old update detected, skipping...");
-          return;
-        }
-
-        const now = Math.floor(Date.now() / 1000);
-        if (data.timestamp && now - data.timestamp > 10) {
-          console.log("Old update detected (>10 seconds), skipping...");
-          return;
-        }
-
-        if (data.timestamp) {
-          lastProcessedTimestamp.current = data.timestamp;
-        }
-
-        if (data.medicineId && data.scheduleId && data.status) {
-          handleFirebaseUpdate(data);
-        }
-      });
-    } catch (error) {
-      console.error("Firebase listener error:", error);
-      setIsConnected(false);
-    }
-
-    return () => {
-      console.log("Cleaning up Firebase listeners");
-      if (unsubscribe) {
-        unsubscribe();
-      }
-      if (medicinesUnsubscribe) {
-        medicinesUnsubscribe();
-      }
-      setIsConnected(false);
-      isFirstLoad.current = true;
-    };
-  }, []);
-
-  const handleFirebaseUpdate = async (data: FirebaseUpdate) => {
-    const {
-      medicineId,
-      scheduleId,
-      status,
-      time = "",
-      date = "",
-      datetime = "",
-    } = data;
-
-    setMedicines((prev) => {
-      const updated = prev.map((med) => {
-        if (med.id === medicineId) {
-          const updatedSchedules = med.schedules.map((sched) => {
-            if (sched.id === scheduleId) {
-              if (status === "dispensed") {
-                addAlert("dispensed", `${med.name} (${sched.time}) dispensed`);
-                return {
-                  ...sched,
-                  dispensed: true,
-                  taken: false,
-                  alert: false,
-                };
-              } else if (status === "taken") {
-                addAlert(
-                  "taken",
-                  `${med.name} (${sched.time}) taken at ${time}`
-                );
-
-                // Add to history
-                firebaseService.addHistoryRecord({
-                  name: med.name,
-                  dosage: med.dosage,
-                  scheduledTime: sched.time,
-                  takenTime: time,
-                  date: date,
-                  status: "taken",
-                  timestamp: Date.now(),
-                });
-
-                return {
-                  ...sched,
-                  dispensed: true,
-                  taken: true,
-                  alert: false,
-                };
-              } else if (status === "alert") {
-                addAlert("missed", `${med.name} (${sched.time}) at ${time}`);
-
-                // Add to history as missed
-                firebaseService.addHistoryRecord({
-                  name: med.name,
-                  dosage: med.dosage,
-                  scheduledTime: sched.time,
-                  takenTime: time,
-                  date: date,
-                  status: "missed",
-                  timestamp: Date.now(),
-                });
-
-                return {
-                  ...sched,
-                  dispensed: true,
-                  taken: false,
-                  alert: true,
-                };
-              }
-            }
-            return sched;
-          });
-
-          const medicine = { ...med, schedules: updatedSchedules };
-          const schedule = medicine.schedules.find((s) => s.id === scheduleId);
-          if (schedule) {
-            showNotification(medicine, schedule, status || "", time, date);
-          }
-
-          return medicine;
-        }
-        return med;
-      });
-
-      setLastUpdate(datetime);
-      return updated;
-    });
-  };
-
-  const showNotification = (
-    medicine: Medicine,
-    schedule: Schedule,
-    status: string,
-    time: string,
-    date: string
-  ) => {
-    const medicineName = `${medicine.name} (${schedule.time})`;
-
-    if (status === "dispensed") {
-      setNotification(`💊 ${medicineName} dispensed - monitoring started`);
-      setNotificationType("success");
-      setTimeout(() => setNotification(""), 5000);
-    } else if (status === "taken") {
-      setNotification(`✓ ${medicineName} taken at ${time} on ${date}`);
-      setNotificationType("success");
-      setTimeout(() => setNotification(""), 5000);
-    } else if (status === "alert") {
-      setNotification(`⚠️ ALERT: ${medicineName} NOT taken after 1 minute!`);
-      setNotificationType("error");
-      setTimeout(() => setNotification(""), 8000);
-    }
-  };
 
   const handleScheduleToggle = async (
     medicineId: string,

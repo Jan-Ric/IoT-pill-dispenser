@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Home, History, Info, User, X } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import HistoryComponent from "./components/History";
@@ -6,8 +6,22 @@ import About from "./components/About";
 import Account from "./components/Account";
 import { getDatabase, ref, onValue } from "firebase/database";
 import { initializeApp } from "firebase/app";
+import { firebaseService } from "./services/firebaseService";
+import type { Medicine } from "./types";
+import type { Alert } from "./services/firebaseService";
 
 type Page = "dashboard" | "history" | "about" | "account";
+
+interface FirebaseUpdate {
+  medicineId?: string;
+  scheduleId?: string;
+  medicine_taken?: boolean;
+  status?: string;
+  date?: string;
+  time?: string;
+  datetime?: string;
+  timestamp?: number;
+}
 
 const firebaseConfig = {
   apiKey: "AIzaSyDSwvmOYIJvi1yGUsptwjseRJlenYLJGzo",
@@ -28,6 +42,17 @@ function App() {
   const [userName, setUserName] = useState<string>("User");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  // Lifted state from Dashboard
+  const [medicines, setMedicines] = useState<Medicine[]>([]);
+  const [lastUpdate, setLastUpdate] = useState<string>("");
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [recentAlerts, setRecentAlerts] = useState<Alert[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  const lastProcessedTimestamp = useRef<number>(0);
+  const isFirstLoad = useRef<boolean>(true);
+  const connectionLostTime = useRef<number | null>(null);
+
   // Load user name from Firebase and listen for changes
   useEffect(() => {
     const userProfileRef = ref(database, "user_profile");
@@ -42,10 +67,265 @@ function App() {
     return () => unsubscribe();
   }, []);
 
+  // Load medicines from localStorage on mount
+  useEffect(() => {
+    const savedMedicines = localStorage.getItem("meditrack_medicines");
+    if (savedMedicines) {
+      try {
+        setMedicines(JSON.parse(savedMedicines));
+      } catch (error) {
+        console.error("Error loading medicines from localStorage:", error);
+      }
+    }
+  }, []);
+
+  // Save medicines to localStorage whenever they change
+  useEffect(() => {
+    if (medicines.length > 0) {
+      localStorage.setItem("meditrack_medicines", JSON.stringify(medicines));
+    }
+  }, [medicines]);
+
+  // Load recent alerts from Firebase
+  useEffect(() => {
+    const loadAlerts = async () => {
+      const alerts = await firebaseService.getAlerts();
+      setRecentAlerts(alerts);
+    };
+    loadAlerts();
+
+    // Listen to alerts changes in real-time
+    const unsubscribe = firebaseService.onAlertsChange((alerts) => {
+      setRecentAlerts(alerts);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Add alert to Firebase
+  const addAlert = async (
+    type: "missed" | "connection" | "dispensed" | "taken",
+    message: string
+  ) => {
+    await firebaseService.addAlert({
+      type,
+      message,
+      time: new Date().toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+      timestamp: Date.now(),
+    });
+  };
+
+  // Monitor connection status
+  useEffect(() => {
+    if (!isConnected && connectionLostTime.current === null) {
+      connectionLostTime.current = Date.now();
+    } else if (isConnected && connectionLostTime.current !== null) {
+      const disconnectedDuration = Date.now() - connectionLostTime.current;
+      const minutes = Math.floor(disconnectedDuration / 60000);
+      if (minutes > 0) {
+        addAlert(
+          "connection",
+          `Connection lost for ${minutes} min${minutes > 1 ? "s" : ""}`
+        );
+      }
+      connectionLostTime.current = null;
+    }
+  }, [isConnected]);
+
+  // Load medicines from Firebase on mount
+  useEffect(() => {
+    loadMedicines();
+  }, []);
+
+  const loadMedicines = async () => {
+    setIsLoading(true);
+    try {
+      const medicinesData = await firebaseService.getMedicines();
+      const loadedMedicines = Object.values(medicinesData).filter(
+        (m): m is Medicine => m !== null
+      );
+      setMedicines(loadedMedicines);
+      setIsConnected(true);
+      console.log("Loaded medicines from Firebase:", loadedMedicines);
+    } catch (error) {
+      console.error("Error loading medicines:", error);
+      setIsConnected(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Firebase listener for medicine updates
+  useEffect(() => {
+    setIsConnected(true);
+    let unsubscribe: (() => void) | null = null;
+    let medicinesUnsubscribe: (() => void) | null = null;
+
+    try {
+      // Listen to medicines structure changes (add/remove/edit medicines)
+      medicinesUnsubscribe = firebaseService.onMedicinesChange(
+        (medicinesData) => {
+          const meds = Object.values(medicinesData).filter(
+            (m): m is Medicine => m !== null
+          );
+          setMedicines(meds);
+          console.log("Medicines updated:", meds);
+        }
+      );
+
+      // Listen to medicine_updates for real-time status changes (taken/dispensed/alert)
+      unsubscribe = firebaseService.onValue((data: FirebaseUpdate) => {
+        console.log("Firebase update received:", data);
+
+        if (isFirstLoad.current) {
+          console.log("First load - ignoring initial Firebase snapshot");
+          isFirstLoad.current = false;
+
+          if (data.timestamp) {
+            lastProcessedTimestamp.current = data.timestamp;
+          }
+          return;
+        }
+
+        if (
+          data.timestamp &&
+          data.timestamp <= lastProcessedTimestamp.current
+        ) {
+          console.log("Duplicate or old update detected, skipping...");
+          return;
+        }
+
+        const now = Math.floor(Date.now() / 1000);
+        if (data.timestamp && now - data.timestamp > 10) {
+          console.log("Old update detected (>10 seconds), skipping...");
+          return;
+        }
+
+        if (data.timestamp) {
+          lastProcessedTimestamp.current = data.timestamp;
+        }
+
+        if (data.medicineId && data.scheduleId && data.status) {
+          handleFirebaseUpdate(data);
+        }
+      });
+    } catch (error) {
+      console.error("Firebase listener error:", error);
+      setIsConnected(false);
+    }
+
+    return () => {
+      console.log("Cleaning up Firebase listeners");
+      if (unsubscribe) {
+        unsubscribe();
+      }
+      if (medicinesUnsubscribe) {
+        medicinesUnsubscribe();
+      }
+      setIsConnected(false);
+      isFirstLoad.current = true;
+    };
+  }, []);
+
+  const handleFirebaseUpdate = async (data: FirebaseUpdate) => {
+    const {
+      medicineId,
+      scheduleId,
+      status,
+      time = "",
+      date = "",
+      datetime = "",
+    } = data;
+
+    setMedicines((prev) => {
+      const updated = prev.map((med) => {
+        if (med.id === medicineId) {
+          const updatedSchedules = med.schedules.map((sched) => {
+            if (sched.id === scheduleId) {
+              if (status === "dispensed") {
+                addAlert("dispensed", `${med.name} (${sched.time}) dispensed`);
+                return {
+                  ...sched,
+                  dispensed: true,
+                  taken: false,
+                  alert: false,
+                };
+              } else if (status === "taken") {
+                addAlert(
+                  "taken",
+                  `${med.name} (${sched.time}) taken at ${time}`
+                );
+
+                // Add to history
+                firebaseService.addHistoryRecord({
+                  name: med.name,
+                  dosage: med.dosage,
+                  scheduledTime: sched.time,
+                  takenTime: time,
+                  date: date,
+                  status: "taken",
+                  timestamp: Date.now(),
+                });
+
+                return {
+                  ...sched,
+                  dispensed: true,
+                  taken: true,
+                  alert: false,
+                };
+              } else if (status === "alert") {
+                addAlert("missed", `${med.name} (${sched.time}) at ${time}`);
+
+                // Add to history as missed
+                firebaseService.addHistoryRecord({
+                  name: med.name,
+                  dosage: med.dosage,
+                  scheduledTime: sched.time,
+                  takenTime: time,
+                  date: date,
+                  status: "missed",
+                  timestamp: Date.now(),
+                });
+
+                return {
+                  ...sched,
+                  dispensed: true,
+                  taken: false,
+                  alert: true,
+                };
+              }
+            }
+            return sched;
+          });
+
+          return { ...med, schedules: updatedSchedules };
+        }
+        return med;
+      });
+
+      setLastUpdate(datetime);
+      return updated;
+    });
+  };
+
   const renderPage = () => {
     switch (currentPage) {
       case "dashboard":
-        return <Dashboard />;
+        return (
+          <Dashboard
+            medicines={medicines}
+            setMedicines={setMedicines}
+            lastUpdate={lastUpdate}
+            isConnected={isConnected}
+            recentAlerts={recentAlerts}
+            isLoading={isLoading}
+            loadMedicines={loadMedicines}
+            addAlert={addAlert}
+          />
+        );
       case "history":
         return <HistoryComponent />;
       case "about":
@@ -53,7 +333,18 @@ function App() {
       case "account":
         return <Account />;
       default:
-        return <Dashboard />;
+        return (
+          <Dashboard
+            medicines={medicines}
+            setMedicines={setMedicines}
+            lastUpdate={lastUpdate}
+            isConnected={isConnected}
+            recentAlerts={recentAlerts}
+            isLoading={isLoading}
+            loadMedicines={loadMedicines}
+            addAlert={addAlert}
+          />
+        );
     }
   };
 
