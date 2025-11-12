@@ -78,6 +78,7 @@ function App() {
     type: "missed" | "connection" | "dispensed" | "taken",
     message: string
   ) => {
+    console.log("🔔 Creating alert:", { type, message }); // ADD THIS LINE
     await firebaseService.addAlert({
       type,
       message,

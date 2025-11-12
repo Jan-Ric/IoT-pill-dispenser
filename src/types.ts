@@ -55,3 +55,11 @@ export interface SyncCommand {
   reload: boolean;
   timestamp: number;
 }
+
+export interface Alert {
+  id: string;
+  type: "missed" | "connection" | "dispensed" | "taken";
+  message: string;
+  time: string;
+  timestamp: number;
+}
