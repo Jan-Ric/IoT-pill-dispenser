@@ -216,6 +216,15 @@ export const firebaseService = {
     });
   },
 
+  sendRestartCommand: async () => {
+  const restartRef = ref(database, 'restart_command');
+  await set(restartRef, {
+    restart: true,
+    timestamp: Date.now()
+  });
+},
+
+
   // ===== DISPENSE COMMAND (existing) =====
   
   sendDispenseCommand: async (medicineId: string, scheduleId: string) => {

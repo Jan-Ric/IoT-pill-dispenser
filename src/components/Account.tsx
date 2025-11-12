@@ -403,8 +403,22 @@ function Account() {
     );
 
     if (confirmed) {
-      setScheduleNotification("🔄 Restart command sent to device!");
-      setTimeout(() => setScheduleNotification(""), 3000);
+      setIsSyncing(true); // Reuse the syncing state for loading indicator
+      try {
+        await firebaseService.sendRestartCommand();
+        setScheduleNotification("🔄 Restart command sent to device!");
+        setTimeout(() => {
+          setScheduleNotification("");
+          setIsSyncing(false);
+        }, 3000);
+      } catch (error) {
+        console.error("Error sending restart command:", error);
+        setScheduleNotification("❌ Restart command failed");
+        setTimeout(() => {
+          setScheduleNotification("");
+          setIsSyncing(false);
+        }, 3000);
+      }
     }
   };
 
