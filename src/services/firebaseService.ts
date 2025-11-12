@@ -148,45 +148,54 @@ export const firebaseService = {
     await set(dbRef, null);
   },
 
-  // ===== ALERTS MANAGEMENT (NEW) =====
+// ===== ALERTS MANAGEMENT (NEW) =====
+
+// Add alert to Firebase
+addAlert: async (alert: Omit<Alert, "id">) => {
+  const alertId = `alert_${Date.now()}`;
+  const alertRef = ref(database, `alerts/${alertId}`);
+  await set(alertRef, {
+    id: alertId,
+    ...alert,
+  });
+},
+
+// Get all alerts
+getAlerts: async (): Promise<Alert[]> => {
+  const alertsRef = ref(database, "alerts");
+  const snapshot = await get(alertsRef);
   
-  // Add an alert
-  addAlert: async (alert: Omit<Alert, 'id'>) => {
-    const dbRef = ref(database, 'recent_alerts');
-    const snapshot = await get(dbRef);
-    const currentAlerts = snapshot.val() || [];
+  if (!snapshot.exists()) return [];
+  
+  const alertsData = snapshot.val();
+  return Object.values(alertsData).sort(
+    (a: any, b: any) => b.timestamp - a.timestamp
+  ) as Alert[];
+},
+
+// Listen to alerts changes
+onAlertsChange: (callback: (alerts: Alert[]) => void): Unsubscribe => {
+  const alertsRef = ref(database, "alerts");
+  
+  return onValue(alertsRef, (snapshot) => {
+    if (!snapshot.exists()) {
+      callback([]);
+      return;
+    }
     
-    const newAlert: Alert = {
-      ...alert,
-      id: Date.now().toString()
-    };
-    
-    // Keep only the last 10 alerts
-    const updatedAlerts = [newAlert, ...currentAlerts].slice(0, 10);
-    await set(dbRef, updatedAlerts);
-  },
+    const alertsData = snapshot.val();
+    const alerts = Object.values(alertsData).sort(
+      (a: any, b: any) => b.timestamp - a.timestamp
+    );
+    callback(alerts as Alert[]);
+  });
+},
 
-  // Get recent alerts
-  getAlerts: async (): Promise<Alert[]> => {
-    const dbRef = ref(database, 'recent_alerts');
-    const snapshot = await get(dbRef);
-    return snapshot.val() || [];
-  },
-
-  // Listen to alerts changes
-  onAlertsChange: (callback: (alerts: Alert[]) => void): Unsubscribe => {
-    const dbRef = ref(database, 'recent_alerts');
-    return onValue(dbRef, (snapshot) => {
-      const data = snapshot.val();
-      callback(data || []);
-    });
-  },
-
-  // Clear alerts
-  clearAlerts: async () => {
-    const dbRef = ref(database, 'recent_alerts');
-    await set(dbRef, []);
-  },
+// Clear alerts
+clearAlerts: async () => {
+  const dbRef = ref(database, 'recent_alerts');
+  await set(dbRef, []);
+},
 
   // ===== SYNC COMMAND (existing) =====
   
