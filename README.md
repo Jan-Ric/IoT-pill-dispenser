@@ -1,8 +1,8 @@
 ## MediTrack - Automated Medicine Pill Dispenser System
-OVERVIEW
-#MediTrack is an IoT-based medication management system that combines Arduino hardware with Firebase cloud integration to ensure timely medicine intake and improve patient adherence. The system automatically dispenses medications at scheduled times, monitors intake using ultrasonic sensors, and provides real-time alerts to caregivers.
-SYSTEM OBJECTIVE
-#Primary Goals:
+### OVERVIEW
+### MediTrack is an IoT-based medication management system that combines Arduino hardware with Firebase cloud integration to ensure timely medicine intake and improve patient adherence. The system automatically dispenses medications at scheduled times, monitors intake using ultrasonic sensors, and provides real-time alerts to caregivers.
+## SYSTEM OBJECTIVE
+### Primary Goals:
 
 Automate medication dispensing at scheduled times
 Monitor medicine intake in real-time using sensors
@@ -11,7 +11,7 @@ Send automated email notifications to caregivers
 Track adherence rates with comprehensive analytics
 Enable remote monitoring via web dashboard
 
-#Significance:
+### Significance:
 This system addresses medication non-adherence, a critical healthcare challenge affecting millions of patients worldwide. By combining automated dispensing, real-time monitoring, and caregiver notifications, MediTrack reduces the risk of missed medications and improves treatment outcomes.
 TECHNOLOGIES AND SERVICES
 #Frontend Framework:
@@ -20,62 +20,62 @@ React 18 with TypeScript
 Tailwind CSS for styling
 Vite for build tooling
 
-#Backend Services:
+### Backend Services:
 
 Firebase Realtime Database (cloud data storage)
 Firebase Cloud Functions (serverless backend)
 SendGrid API (email notifications)
 
-#Hardware Communication:
+### Hardware Communication:
 
 Firebase Realtime Database (IoT device integration)
 NTP Time Synchronization
 WiFi Communication (802.11)
 
-#Data Processing:
+### Data Processing:
 
 SheetJS (XLSX) for Excel export
 Papaparse for CSV handling
 Lodash for data manipulation
 
-##DEVELOPMENT ENVIRONMENT
-#IDEs and Tools:
+## DEVELOPMENT ENVIRONMENT
+### IDEs and Tools:
 
 Visual Studio Code (frontend development)
 Arduino IDE (hardware programming)
 Firebase Console (database management)
 Node.js runtime environment
 
-#Version Control:
+### Version Control:
 
 Git for source control
 GitHub for repository hosting
 
-#Package Management:
+### Package Management:
 
 npm (Node Package Manager)
 Arduino Library Manager
 
-##HARDWARE COMPONENTS
-Microcontroller:
+## HARDWARE COMPONENTS
+### Microcontroller:
 
 Arduino UNO R4 WiFi (main controller with built-in WiFi)
 
-#Actuators:
+### Actuators:
 
 6x SG90 Servo Motors (2 per medicine slot)
 PCA9685 16-Channel PWM Servo Driver
 
-#Sensors:
+### Sensors:
 
 HC-SR04 Ultrasonic Sensor (distance measurement for intake detection)
 
-#Output Devices:
+### Output Devices:
 
 16x2 I2C LCD Display (status information)
 Active Buzzer Module (audio alerts)
 
-#Input Devices:
+### Input Devices:
 
 Push Buttons (manual dispensing override)
 
@@ -87,13 +87,13 @@ History page with Excel export capability
 Account page for medicine schedule management
 About page with system information
 
-#Firebase Cloud Functions (Node.js):
+### Firebase Cloud Functions (Node.js):
 
 Real-time medicine status updates handler
 Automated email notification service
 Daily summary report generator (9 PM schedule)
 
-#Arduino Firmware (C++):
+### Arduino Firmware (C++):
 
 Schedule management and time synchronization
 Servo motor control for dispensing
@@ -101,7 +101,7 @@ Ultrasonic sensor monitoring for intake detection
 Firebase communication over WiFi
 LCD display updates and buzzer alerts
 
-#SYSTEM WORKFLOW
+### SYSTEM WORKFLOW
 1. Schedule Configuration
 Users configure medicine schedules through the web dashboard, specifying medicine names, dosages, and daily times for each of the three available slots.
 2. Automated Dispensing
@@ -130,7 +130,7 @@ Successful medicine intake (confirmation)
 Missed medications (alerts)
 Daily summary reports (9 PM)
 
-##FIREBASE DATABASE STRUCTURE
+## FIREBASE DATABASE STRUCTURE
 /medicines
   /slot_0, /slot_1, /slot_2
     - name: string
@@ -186,8 +186,8 @@ Daily summary reports (9 PM)
 /restart_command
   - restart: boolean
   - timestamp: number
-##SETUP AND INSTALLATION
-#Hardware Setup:
+## SETUP AND INSTALLATION
+### Hardware Setup:
 
 Connect servo motors to PCA9685 board (channels 0-5)
 Wire HC-SR04 sensor (Trig/Echo pins)
@@ -196,7 +196,7 @@ Wire buzzer module to digital pin
 Connect push buttons for manual control
 Power Arduino via USB or external supply
 
-#Software Setup:
+### Software Setup:
 
 Clone repository
 Install Node.js dependencies: npm install
@@ -205,7 +205,7 @@ Set SendGrid API key in Firebase Functions environment
 Upload Arduino sketch to UNO R4 WiFi
 Start development server: npm run dev
 
-#Firebase Functions Deployment:
+### Firebase Functions Deployment:
 
 Install Firebase CLI: npm install -g firebase-tools
 Login to Firebase: firebase login
@@ -218,8 +218,8 @@ firebase functions:config:set caregiver.email="EMAIL"
 
 Deploy functions: firebase deploy --only functions
 
-##KEY FEATURES
-#Hardware Capabilities:
+## KEY FEATURES
+### Hardware Capabilities:
 
 Three independent medicine slots
 Automated dispensing with dual-servo mechanism
@@ -228,7 +228,7 @@ Audio alert system
 Manual override buttons
 LCD status display
 
-#Software Capabilities:
+### Software Capabilities:
 
 Real-time synchronization across devices
 Persistent data storage in cloud
@@ -237,7 +237,7 @@ Excel export for medical records
 Responsive web interface (desktop and mobile)
 Historical data with filtering and analytics
 
-#Safety Features:
+### Safety Features:
 
 Duplicate prevention for email notifications
 Connection loss detection and alerts
@@ -245,7 +245,7 @@ Timestamp validation to prevent stale updates
 Error handling and logging
 Manual intervention options
 
-##LIMITATIONS AND CONSTRAINTS
+## LIMITATIONS AND CONSTRAINTS
 
 Maximum 3 medicines (hardware limitation)
 1-minute monitoring window after dispensing
@@ -254,4 +254,4 @@ Browser storage not used (Firebase-only persistence)
 Email notifications require SendGrid account
 Arduino must maintain NTP time synchronization
 
-Copyright 2025 MediTrack Development Team. All rights reserved.
+#### Copyright 2025 MediTrack Development Team. All rights reserved.
