@@ -1,0 +1,1100 @@
+#include <WiFiS3.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+//WIFI credentials
+const char *ssid = "P****";
+const char *password = "P***";
+
+
+const int TRIG_PIN = 7;
+const int ECHO_PIN = 8;
+const int BUZZER_PIN = 9;
+
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+#define SERVOMIN 150
+#define SERVOMAX 600
+#define SERVO_FREQ 50
+
+const int servo1A = 0;
+const int servo1B = 1;
+const int servo2A = 2;
+const int servo2B = 3;
+const int servo3A = 4;
+const int servo3B = 5;
+
+const int SERVO_CLOSED = 0;
+const int SERVO_OPEN = 90;
+const int SERVO_DELAY = 1000;
+
+const float DISTANCE_TAKEN = 8.0;
+const float DISTANCE_NOT_TAKEN = 7.0;
+const unsigned long TIMEOUT_DURATION = 60000;
+
+unsigned long lastRestartCheck = 0;
+
+struct Schedule {
+  String id;
+  String time;
+  bool dispensed;
+  bool taken;
+  bool alert;
+};
+
+struct Medicine {
+  String id;
+  String name;
+  String dosage;
+  int servoIndex;
+  Schedule schedules[10];
+  int scheduleCount;
+  unsigned long dispenseTime;
+  unsigned long monitorStartTime;
+  String currentScheduleId;
+};
+
+// ============= NEW: QUEUE SYSTEM STRUCTURES =============
+struct DispenseTask {
+  int medicineIndex;
+  int scheduleIndex;
+  String source;  // "scheduled" or "manual"
+};
+
+const int MAX_QUEUE_SIZE = 10;
+DispenseTask dispenseQueue[MAX_QUEUE_SIZE];
+int queueFront = 0;
+int queueRear = 0;
+int queueCount = 0;
+bool isProcessingQueue = false;
+
+// Queue management functions
+bool enqueueDispense(int medIndex, int schedIndex, String source);
+bool dequeueDispense(DispenseTask &task);
+bool isQueueEmpty();
+bool isQueueFull();
+void processDispenseQueue();
+// ========================================================
+
+Medicine medicines[3];
+int medicineCount = 0;
+
+WiFiSSLClient client;
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 28800, 60000);
+
+const char *ntpServers[] = {
+  "pool.ntp.org",
+  "time.google.com",
+  "time.cloudflare.com",
+  "time.nist.gov"
+};
+const int NUM_NTP_SERVERS = 4;
+int currentNTPServer = 0;
+
+unsigned long lastNTPUpdate = 0;
+unsigned long lastScheduleCheck = 0;
+unsigned long lastSyncCheck = 0;
+unsigned long lastDispenseCheck = 0;
+unsigned long lastDistanceCheck = 0;
+unsigned long lastLCDUpdate = 0;
+bool timeInitialized = false;
+int currentMonitoringMedicine = -1;
+int timeSyncAttempts = 0;
+
+void lcdPrint(String line1, String line2 = "", int delayMs = 0);
+void loadMedicinesFromFirebase();
+void checkSyncCommand();
+void checkDispenseCommand();
+float getDistance();
+void setServoAngle(uint8_t channel, int angle);
+void operateServoSequence(int servoA, int servoB, String medicineName);
+void dispenseMedicine(int medicineIndex, int scheduleIndex);
+void monitorMedicineTaken(int medicineIndex);
+void activateBuzzer();
+void checkSchedules();
+String getCurrentTimeString();
+void updateTime();
+bool syncTimeWithNTP();
+String getFormattedDateTime();
+String getFormattedTime();
+String getFormattedDate();
+void sendStatusToFirebase(String medicineId, String scheduleId, String status, bool taken);
+void clearSyncCommand();
+void clearDispenseCommand();
+
+void lcdPrint(String line1, String line2, int delayMs) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+  if (line2.length() > 0) {
+    lcd.setCursor(0, 1);
+    lcd.print(line2);
+  }
+  if (delayMs > 0) {
+    delay(delayMs);
+  }
+}
+
+// ============= NEW: QUEUE IMPLEMENTATION =============
+bool enqueueDispense(int medIndex, int schedIndex, String source) {
+  if (isQueueFull()) {
+    lcdPrint("Queue Full!", "Cannot Add", 2000);
+    return false;
+  }
+
+  dispenseQueue[queueRear].medicineIndex = medIndex;
+  dispenseQueue[queueRear].scheduleIndex = schedIndex;
+  dispenseQueue[queueRear].source = source;
+
+  queueRear = (queueRear + 1) % MAX_QUEUE_SIZE;
+  queueCount++;
+
+  lcdPrint("Added to Queue", "Position: " + String(queueCount), 1500);
+  return true;
+}
+
+bool dequeueDispense(DispenseTask &task) {
+  if (isQueueEmpty()) {
+    return false;
+  }
+
+  task = dispenseQueue[queueFront];
+  queueFront = (queueFront + 1) % MAX_QUEUE_SIZE;
+  queueCount--;
+
+  return true;
+}
+
+bool isQueueEmpty() {
+  return queueCount == 0;
+}
+
+bool isQueueFull() {
+  return queueCount >= MAX_QUEUE_SIZE;
+}
+
+void processDispenseQueue() {
+  if (isProcessingQueue || isQueueEmpty()) {
+    return;
+  }
+
+  // Don't process queue if currently monitoring
+  if (currentMonitoringMedicine >= 0) {
+    return;
+  }
+
+  isProcessingQueue = true;
+
+  DispenseTask task;
+  if (dequeueDispense(task)) {
+    lcdPrint("Processing Queue", String(queueCount) + " remaining", 1500);
+
+    String sourceMsg = task.source == "manual" ? "MANUAL" : "SCHEDULED";
+    lcdPrint(sourceMsg + " Disp", medicines[task.medicineIndex].name.substring(0, 13), 1500);
+
+    dispenseMedicine(task.medicineIndex, task.scheduleIndex);
+  }
+
+  isProcessingQueue = false;
+}
+// =====================================================
+
+void setup() {
+  lcd.init();
+  lcd.backlight();
+  lcdPrint("  MediTrack", "  Booting...", 1000);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  lcdPrint("Init Sensors", "Ultrasonic: OK", 1000);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, HIGH);
+  lcdPrint("Init Sensors", "Buzzer: OK", 1000);
+
+  pwm.begin();
+  pwm.setPWMFreq(SERVO_FREQ);
+  delay(10);
+
+  lcdPrint("Init Servos", "Testing...", 500);
+
+  for (int i = 0; i < 6; i++) {
+    setServoAngle(i, SERVO_CLOSED);
+    delay(100);
+  }
+
+  lcdPrint("Init Complete", "All Servos OK", 1000);
+
+  lcdPrint("WiFi Connect", "Please wait...");
+
+  WiFi.begin(ssid, password);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500);
+    attempts++;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    lcdPrint("WiFi FAILED!", "Check Router", 3000);
+    while (1) { delay(1000); }
+  }
+
+  lcdPrint("WiFi Connected!", WiFi.localIP().toString().substring(0, 13), 2000);
+
+  lcdPrint("Sync Time", "NTP Server...");
+
+  timeClient.begin();
+
+  bool timeSynced = syncTimeWithNTP();
+
+  if (timeSynced) {
+    timeInitialized = true;
+    lastNTPUpdate = millis();
+    lcdPrint("Time Synced!", getCurrentTimeString(), 2000);
+  } else {
+    lcdPrint("Time Sync", "Failed-Retry", 2000);
+  }
+
+  lcdPrint("Loading", "Medicines...", 1000);
+  loadMedicinesFromFirebase();
+
+  lcdPrint("  SYSTEM READY", "  All OK!", 2000);
+  lcdPrint("MediTrack", timeInitialized ? getCurrentTimeString() : "Syncing...");
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  if (!timeInitialized) {
+    if (currentMillis - lastNTPUpdate >= 2000) {
+      if (syncTimeWithNTP()) {
+        timeInitialized = true;
+        lcdPrint("Time Synced!", getCurrentTimeString(), 2000);
+      }
+      lastNTPUpdate = currentMillis;
+    }
+  } else {
+    if (currentMillis - lastNTPUpdate >= 10000) {
+      updateTime();
+      lastNTPUpdate = currentMillis;
+    }
+  }
+
+  if (currentMillis - lastSyncCheck >= 5000) {
+    checkSyncCommand();
+    lastSyncCheck = currentMillis;
+  }
+
+  if (currentMillis - lastDispenseCheck >= 5000) {
+    checkDispenseCommand();
+    lastDispenseCheck = currentMillis;
+  }
+  if (currentMillis - lastRestartCheck >= 5000) {
+    checkRestartCommand();
+    lastRestartCheck = currentMillis;
+  }
+  if (currentMillis - lastScheduleCheck >= 30000) {
+    checkSchedules();
+    lastScheduleCheck = currentMillis;
+  }
+
+  // ============= MODIFIED: Process queue when monitoring is done =============
+  if (currentMonitoringMedicine >= 0) {
+    monitorMedicineTaken(currentMonitoringMedicine);
+  } else {
+    // Process queue when not monitoring
+    if (!isQueueEmpty()) {
+      processDispenseQueue();
+    } else {
+      if (currentMillis - lastLCDUpdate >= 5000) {
+        lcdPrint("MediTrack", timeInitialized ? getCurrentTimeString() : "Syncing...");
+        lastLCDUpdate = currentMillis;
+      }
+    }
+  }
+  // ===========================================================================
+
+  delay(50);
+}
+
+void loadMedicinesFromFirebase() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  WiFiSSLClient loadClient;
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  if (!loadClient.connect(host, port)) {
+    lcdPrint("Load Failed", "Try Again", 2000);
+    loadClient.stop();
+    return;
+  }
+
+  String request = "GET /medicines.json HTTP/1.1\r\n";
+  request += "Host: " + String(host) + "\r\n";
+  request += "Connection: close\r\n\r\n";
+
+  loadClient.print(request);
+
+  unsigned long timeout = millis();
+  while (loadClient.available() == 0) {
+    if (millis() - timeout > 5000) {
+      loadClient.stop();
+      return;
+    }
+  }
+
+  while (loadClient.available()) {
+    String line = loadClient.readStringUntil('\n');
+    if (line == "\r") break;
+  }
+
+  String response = "";
+  while (loadClient.available()) {
+    response += (char)loadClient.read();
+  }
+  loadClient.stop();
+
+  medicineCount = 0;
+
+  for (int slotIdx = 0; slotIdx < 3; slotIdx++) {
+    String slotKey = "\"slot_" + String(slotIdx) + "\"";
+    int slotPos = response.indexOf(slotKey);
+
+    if (slotPos < 0) continue;
+
+    int nullCheck = response.indexOf("null", slotPos);
+    int nextBrace = response.indexOf("{", slotPos);
+
+    if (nullCheck > 0 && nullCheck < nextBrace) {
+      continue;
+    }
+
+    Medicine &med = medicines[medicineCount];
+
+    int nameStart = response.indexOf("\"name\":\"", slotPos) + 8;
+    int nameEnd = response.indexOf("\"", nameStart);
+    med.name = response.substring(nameStart, nameEnd);
+
+    int dosageStart = response.indexOf("\"dosage\":\"", slotPos) + 10;
+    int dosageEnd = response.indexOf("\"", dosageStart);
+    med.dosage = response.substring(dosageStart, dosageEnd);
+
+    int servoStart = response.indexOf("\"servoIndex\":", slotPos) + 13;
+    int servoEnd = response.indexOf(",", servoStart);
+    if (servoEnd < 0) servoEnd = response.indexOf("}", servoStart);
+    med.servoIndex = response.substring(servoStart, servoEnd).toInt();
+
+    med.id = "slot_" + String(slotIdx);
+    med.scheduleCount = 0;
+    med.dispenseTime = 0;
+    med.monitorStartTime = 0;
+    med.currentScheduleId = "";
+
+    int schedulesStart = response.indexOf("\"schedules\":[", slotPos);
+    if (schedulesStart > 0) {
+      int schedulesEnd = response.indexOf("]", schedulesStart);
+      String schedulesBlock = response.substring(schedulesStart + 13, schedulesEnd);
+
+      int pos = 0;
+      while (pos < schedulesBlock.length() && med.scheduleCount < 10) {
+        int schedStart = schedulesBlock.indexOf("{", pos);
+        if (schedStart < 0) break;
+
+        int schedEnd = schedulesBlock.indexOf("}", schedStart);
+        String schedBlock = schedulesBlock.substring(schedStart, schedEnd + 1);
+
+        Schedule &sched = med.schedules[med.scheduleCount];
+
+        int idStart = schedBlock.indexOf("\"id\":\"") + 6;
+        int idEnd = schedBlock.indexOf("\"", idStart);
+        sched.id = schedBlock.substring(idStart, idEnd);
+
+        int timeStart = schedBlock.indexOf("\"time\":\"") + 8;
+        int timeEnd = schedBlock.indexOf("\"", timeStart);
+        sched.time = schedBlock.substring(timeStart, timeEnd);
+
+        sched.dispensed = false;
+        sched.taken = false;
+        sched.alert = false;
+
+        med.scheduleCount++;
+        pos = schedEnd + 1;
+      }
+    }
+
+    medicineCount++;
+  }
+
+  lcdPrint("Loaded OK!", String(medicineCount) + " Medicines", 2000);
+}
+
+// ============= MODIFIED: Add to queue instead of dispensing immediately =============
+void checkDispenseCommand() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiSSLClient dispenseClient;
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  if (!dispenseClient.connect(host, port)) {
+    dispenseClient.stop();
+    return;
+  }
+
+  String request = "GET /dispense_command.json HTTP/1.1\r\n";
+  request += "Host: " + String(host) + "\r\n";
+  request += "Connection: close\r\n\r\n";
+
+  dispenseClient.print(request);
+
+  unsigned long timeout = millis();
+  while (dispenseClient.available() == 0) {
+    if (millis() - timeout > 3000) {
+      dispenseClient.stop();
+      return;
+    }
+  }
+
+  while (dispenseClient.available()) {
+    String line = dispenseClient.readStringUntil('\n');
+    if (line == "\r") break;
+  }
+
+  String response = "";
+  while (dispenseClient.available()) {
+    response += (char)dispenseClient.read();
+  }
+  dispenseClient.stop();
+
+  if (response.indexOf("\"servoIndex\":") > 0) {
+    int servoStart = response.indexOf("\"servoIndex\":\"") + 14;
+    int servoEnd = response.indexOf("\"", servoStart);
+    String servoIndexStr = response.substring(servoStart, servoEnd);
+    int servoIndex = servoIndexStr.toInt();
+
+    String scheduleId = "";
+    int schedIdStart = response.indexOf("\"scheduleId\":\"");
+    if (schedIdStart > 0) {
+      schedIdStart += 14;
+      int schedIdEnd = response.indexOf("\"", schedIdStart);
+      scheduleId = response.substring(schedIdStart, schedIdEnd);
+    }
+
+    int medIdx = -1;
+    for (int i = 0; i < medicineCount; i++) {
+      if (medicines[i].servoIndex == servoIndex) {
+        medIdx = i;
+        break;
+      }
+    }
+
+    if (medIdx >= 0) {
+      int schedIdx = -1;
+      for (int j = 0; j < medicines[medIdx].scheduleCount; j++) {
+        if (medicines[medIdx].schedules[j].id == scheduleId) {
+          schedIdx = j;
+          break;
+        }
+      }
+
+      if (schedIdx >= 0) {
+        clearDispenseCommand();
+
+        // Check if already dispensed to prevent duplicates from manual commands
+        if (!medicines[medIdx].schedules[schedIdx].dispensed) {
+          medicines[medIdx].schedules[schedIdx].dispensed = true;
+          enqueueDispense(medIdx, schedIdx, "manual");
+        } else {
+          lcdPrint("Already Queued", medicines[medIdx].name.substring(0, 13), 1500);
+        }
+      } else {
+        clearDispenseCommand();
+      }
+    } else {
+      clearDispenseCommand();
+    }
+  }
+}
+// ====================================================================================
+
+void clearDispenseCommand() {
+  WiFiSSLClient clearClient;
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  if (clearClient.connect(host, port)) {
+    String request = "DELETE /dispense_command.json HTTP/1.1\r\n";
+    request += "Host: " + String(host) + "\r\n";
+    request += "Connection: close\r\n\r\n";
+    clearClient.print(request);
+    delay(1000);
+    clearClient.stop();
+  }
+}
+
+void checkSyncCommand() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiSSLClient syncClient;
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  if (!syncClient.connect(host, port)) {
+    syncClient.stop();
+    return;
+  }
+
+  String request = "GET /sync_command.json HTTP/1.1\r\n";
+  request += "Host: " + String(host) + "\r\n";
+  request += "Connection: close\r\n\r\n";
+
+  syncClient.print(request);
+
+  unsigned long timeout = millis();
+  while (syncClient.available() == 0) {
+    if (millis() - timeout > 3000) {
+      syncClient.stop();
+      return;
+    }
+  }
+
+  while (syncClient.available()) {
+    String line = syncClient.readStringUntil('\n');
+    if (line == "\r") break;
+  }
+
+  String response = "";
+  while (syncClient.available()) {
+    response += (char)syncClient.read();
+  }
+  syncClient.stop();
+
+  if (response.indexOf("\"reload\":true") > 0) {
+    lcdPrint("SYNC COMMAND", "Reloading...", 1500);
+    loadMedicinesFromFirebase();
+    clearSyncCommand();
+    lcdPrint("Schedules", "Updated!", 2000);
+  }
+}
+
+void clearSyncCommand() {
+  WiFiSSLClient clearClient;
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  if (clearClient.connect(host, port)) {
+    String json = "{\"reload\":false,\"timestamp\":0}";
+    String request = "PUT /sync_command.json HTTP/1.1\r\n";
+    request += "Host: " + String(host) + "\r\n";
+    request += "Content-Type: application/json\r\n";
+    request += "Content-Length: " + String(json.length()) + "\r\n";
+    request += "Connection: close\r\n\r\n";
+    request += json;
+    clearClient.print(request);
+    delay(1000);
+    clearClient.stop();
+  }
+}
+
+
+void checkRestartCommand() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiSSLClient restartClient;
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  if (!restartClient.connect(host, port)) {
+    restartClient.stop();
+    return;
+  }
+
+  String request = "GET /restart_command.json HTTP/1.1\r\n";
+  request += "Host: " + String(host) + "\r\n";
+  request += "Connection: close\r\n\r\n";
+
+  restartClient.print(request);
+
+  unsigned long timeout = millis();
+  while (restartClient.available() == 0) {
+    if (millis() - timeout > 3000) {
+      restartClient.stop();
+      return;
+    }
+  }
+
+  while (restartClient.available()) {
+    String line = restartClient.readStringUntil('\n');
+    if (line == "\r") break;
+  }
+
+  String response = "";
+  while (restartClient.available()) {
+    response += (char)restartClient.read();
+  }
+  restartClient.stop();
+
+  if (response.indexOf("\"restart\":true") > 0) {
+    lcdPrint("RESTARTING", "Device...", 2000);
+    clearRestartCommand();
+    delay(1000);
+    NVIC_SystemReset();  // For Arduino UNO R4 WiFi
+  }
+}
+
+void clearRestartCommand() {
+  WiFiSSLClient clearClient;
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  if (clearClient.connect(host, port)) {
+    String request = "DELETE /restart_command.json HTTP/1.1\r\n";
+    request += "Host: " + String(host) + "\r\n";
+    request += "Connection: close\r\n\r\n";
+    clearClient.print(request);
+    delay(1000);
+    clearClient.stop();
+  }
+}
+
+
+bool syncTimeWithNTP() {
+  timeSyncAttempts++;
+
+  timeClient.setPoolServerName(ntpServers[currentNTPServer]);
+
+  for (int i = 0; i < 5; i++) {
+    if (timeClient.forceUpdate()) {
+      unsigned long epochTime = timeClient.getEpochTime();
+
+      if (epochTime > 1704067200 && epochTime < 4102444800) {
+        timeSyncAttempts = 0;
+        currentNTPServer = 0;
+        return true;
+      }
+    }
+    delay(1000);
+  }
+
+  currentNTPServer = (currentNTPServer + 1) % NUM_NTP_SERVERS;
+
+  return false;
+}
+
+float getDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  float distance = duration * 0.034 / 2.0;
+
+  if (distance == 0 || distance > 400) return -1;
+
+  return distance;
+}
+
+void setServoAngle(uint8_t channel, int angle) {
+  angle = constrain(angle, 0, 180);
+  int pulse = map(angle, 0, 180, SERVOMIN, SERVOMAX);
+  pwm.setPWM(channel, 0, pulse);
+}
+
+void operateServoSequence(int servoA, int servoB, String medicineName) {
+  lcdPrint("Dispensing", "Servo A: 90°");
+  setServoAngle(servoA, SERVO_OPEN);
+  delay(SERVO_DELAY);
+
+  lcdPrint("Dispensing", "Servo A: Close");
+  setServoAngle(servoA, SERVO_CLOSED);
+  delay(3000);
+
+  lcdPrint("Dispensing", "Servo B: 90°");
+  setServoAngle(servoB, SERVO_OPEN);
+  delay(SERVO_DELAY);
+
+  lcdPrint("Dispensing", "Servo B: Close");
+  setServoAngle(servoB, SERVO_CLOSED);
+}
+
+void dispenseMedicine(int medicineIndex, int scheduleIndex) {
+  if (medicineIndex < 0 || medicineIndex >= medicineCount) return;
+
+  Medicine &med = medicines[medicineIndex];
+
+  if (scheduleIndex < 0 || scheduleIndex >= med.scheduleCount) return;
+
+  Schedule &sched = med.schedules[scheduleIndex];
+
+  // Double-check if already dispensed (prevent double dispensing)
+  if (sched.dispensed && sched.taken) {
+    lcdPrint("Already Done", med.name.substring(0, 13), 1500);
+    return;
+  }
+
+  lcdPrint("DISPENSING", med.name.substring(0, 13), 1500);
+
+  int servoA = med.servoIndex * 2;
+  int servoB = med.servoIndex * 2 + 1;
+
+  operateServoSequence(servoA, servoB, med.name);
+
+  sched.dispensed = true;
+  sched.taken = false;
+  sched.alert = false;
+  med.dispenseTime = millis();
+  med.monitorStartTime = millis();
+  med.currentScheduleId = sched.id;
+
+  updateTime();
+  lcdPrint("Sending Data", "To Firebase...", 1000);
+  sendStatusToFirebase(med.id, sched.id, "dispensed", false);
+
+  currentMonitoringMedicine = medicineIndex;
+
+  lcdPrint("Dispense Done", "Monitoring...", 2000);
+}
+
+void monitorMedicineTaken(int medicineIndex) {
+  if (medicineIndex < 0 || medicineIndex >= medicineCount) return;
+
+  Medicine &med = medicines[medicineIndex];
+
+  int schedIdx = -1;
+  for (int i = 0; i < med.scheduleCount; i++) {
+    if (med.schedules[i].id == med.currentScheduleId) {
+      schedIdx = i;
+      break;
+    }
+  }
+
+  if (schedIdx < 0) {
+    currentMonitoringMedicine = -1;
+    return;
+  }
+
+  Schedule &sched = med.schedules[schedIdx];
+
+  if (sched.taken || sched.alert) {
+    currentMonitoringMedicine = -1;
+    return;
+  }
+
+  unsigned long currentMillis = millis();
+  unsigned long elapsedTime = currentMillis - med.monitorStartTime;
+  unsigned long remainingTime = (TIMEOUT_DURATION - elapsedTime) / 1000;
+
+  if (currentMillis - lastDistanceCheck >= 500) {
+    lastDistanceCheck = currentMillis;
+
+    float distance = getDistance();
+
+    if (distance > 0) {
+      String line1 = med.name.substring(0, 13);
+      String line2 = String(distance, 1) + "cm  " + String(remainingTime) + "s";
+
+      // Show queue count if there are pending items
+      if (!isQueueEmpty()) {
+        line2 = String(distance, 1) + "cm Q:" + String(queueCount);
+      }
+
+      lcdPrint(line1, line2);
+
+      if (distance > DISTANCE_TAKEN) {
+        lcdPrint("MEDICINE TAKEN!", med.name.substring(0, 13), 3000);
+
+        sched.taken = true;
+        currentMonitoringMedicine = -1;
+
+        updateTime();
+        lcdPrint("Updating App", "Please wait...", 1000);
+        sendStatusToFirebase(med.id, sched.id, "taken", true);
+
+        lcdPrint("Update Complete", "Check App!", 2000);
+
+        // Show queue status after monitoring is done
+        if (!isQueueEmpty()) {
+          lcdPrint("Queue Processing", String(queueCount) + " remaining", 1500);
+        } else {
+          lcdPrint("MediTrack", timeInitialized ? getCurrentTimeString() : "Syncing...");
+        }
+
+        return;
+      }
+    }
+  }
+
+  if (elapsedTime >= TIMEOUT_DURATION) {
+    lcdPrint("  ALERT!", "Not Taken!", 2000);
+
+    activateBuzzer();
+
+    updateTime();
+    lcdPrint("Sending Alert", "To App...", 1000);
+    sendStatusToFirebase(med.id, sched.id, "alert", false);
+
+    sched.alert = true;
+    currentMonitoringMedicine = -1;
+
+    lcdPrint("Alert Sent!", "Check App", 2000);
+
+    // Show queue status after monitoring is done
+    if (!isQueueEmpty()) {
+      lcdPrint("Queue Processing", String(queueCount) + " remaining", 1500);
+    } else {
+      lcdPrint("MediTrack", timeInitialized ? getCurrentTimeString() : "Syncing...");
+    }
+  }
+}
+
+void activateBuzzer() {
+  for (int i = 0; i < 3; i++) {
+    lcdPrint("  ALERT!", "Beep " + String(i + 1) + "/3");
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(1000);
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(500);
+  }
+}
+
+// ============= MODIFIED: Add all matching schedules to queue =============
+void checkSchedules() {
+  if (!timeInitialized || medicineCount == 0) return;
+
+  String currentTime = getCurrentTimeString();
+  int schedulesFound = 0;
+
+  for (int i = 0; i < medicineCount; i++) {
+    Medicine &med = medicines[i];
+
+    for (int j = 0; j < med.scheduleCount; j++) {
+      Schedule &sched = med.schedules[j];
+
+      if (currentTime == sched.time && !sched.dispensed) {
+        schedulesFound++;
+
+        if (schedulesFound == 1) {
+          lcdPrint("SCHEDULE TIME!", String(schedulesFound) + " Medicine(s)", 1500);
+        }
+
+        // Mark as dispensed BEFORE adding to queue to prevent duplicates
+        sched.dispensed = true;
+
+        // Add to queue
+        enqueueDispense(i, j, "scheduled");
+      }
+    }
+  }
+
+  if (schedulesFound > 1) {
+    lcdPrint("Multiple Meds", String(schedulesFound) + " queued!", 2000);
+  }
+}
+// =========================================================================
+
+String getCurrentTimeString() {
+  if (!timeInitialized) return "00:00";
+
+  int h = timeClient.getHours();
+  int m = timeClient.getMinutes();
+
+  char timeStr[6];
+  sprintf(timeStr, "%02d:%02d", h, m);
+  return String(timeStr);
+}
+
+void updateTime() {
+  if (!timeInitialized) return;
+
+  timeClient.update();
+
+  unsigned long epochTime = timeClient.getEpochTime();
+  if (epochTime < 1704067200) {
+    timeInitialized = false;
+  }
+}
+
+String getFormattedDateTime() {
+  if (!timeInitialized) return "Time not synced";
+
+  unsigned long epochTime = timeClient.getEpochTime();
+  int days = epochTime / 86400;
+  int year = 1970;
+
+  while (days >= 365) {
+    bool isLeap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    int daysInYear = isLeap ? 366 : 365;
+
+    if (days >= daysInYear) {
+      days -= daysInYear;
+      year++;
+    } else {
+      break;
+    }
+  }
+
+  int month = 1;
+  int day = 1;
+  int daysInMonth[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+  if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) {
+    daysInMonth[1] = 29;
+  }
+
+  for (int i = 0; i < 12; i++) {
+    if (days >= daysInMonth[i]) {
+      days -= daysInMonth[i];
+      month++;
+    } else {
+      day = days + 1;
+      break;
+    }
+  }
+
+  char dateTimeStr[20];
+  sprintf(dateTimeStr, "%04d-%02d-%02d %02d:%02d:%02d",
+          year, month, day,
+          timeClient.getHours(),
+          timeClient.getMinutes(),
+          timeClient.getSeconds());
+
+  return String(dateTimeStr);
+}
+
+String getFormattedTime() {
+  if (!timeInitialized) return "00:00";
+
+  char timeStr[6];
+  sprintf(timeStr, "%02d:%02d",
+          timeClient.getHours(),
+          timeClient.getMinutes());
+  return String(timeStr);
+}
+
+String getFormattedDate() {
+  if (!timeInitialized) return "0000-00-00";
+
+  unsigned long epochTime = timeClient.getEpochTime();
+  int days = epochTime / 86400;
+  int year = 1970;
+
+  while (days >= 365) {
+    bool isLeap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    int daysInYear = isLeap ? 366 : 365;
+
+    if (days >= daysInYear) {
+      days -= daysInYear;
+      year++;
+    } else {
+      break;
+    }
+  }
+
+  int month = 1;
+  int day = 1;
+  int daysInMonth[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+  if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) {
+    daysInMonth[1] = 29;
+  }
+
+  for (int i = 0; i < 12; i++) {
+    if (days >= daysInMonth[i]) {
+      days -= daysInMonth[i];
+      month++;
+    } else {
+      day = days + 1;
+      break;
+    }
+  }
+
+  char dateStr[11];
+  sprintf(dateStr, "%04d-%02d-%02d", year, month, day);
+  return String(dateStr);
+}
+
+void sendStatusToFirebase(String medicineId, String scheduleId, String status, bool taken) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  if (!timeInitialized) {
+    if (syncTimeWithNTP()) {
+      timeInitialized = true;
+    }
+  } else {
+    updateTime();
+  }
+
+  String currentDateTime = getFormattedDateTime();
+  String currentTime = getFormattedTime();
+  String currentDate = getFormattedDate();
+
+  const char *host = "meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const int port = 443;
+
+  client.setTimeout(5000);
+
+  unsigned long connectStart = millis();
+  bool connected = false;
+
+  while (millis() - connectStart < 8000) {
+    if (client.connect(host, port)) {
+      connected = true;
+      break;
+    }
+    delay(300);
+  }
+
+  if (!connected) {
+    client.stop();
+    return;
+  }
+
+  String json = "{";
+  json += "\"medicineId\":\"" + medicineId + "\",";
+  json += "\"scheduleId\":\"" + scheduleId + "\",";
+  json += "\"medicine_taken\":" + String(taken ? "true" : "false") + ",";
+  json += "\"status\":\"" + status + "\",";
+  json += "\"date\":\"" + currentDate + "\",";
+  json += "\"time\":\"" + currentTime + "\",";
+  json += "\"datetime\":\"" + currentDateTime + "\",";
+  json += "\"timestamp\":{\".sv\":\"timestamp\"}";
+  json += "}";
+
+  String request = "PUT /medicine_updates.json HTTP/1.1\r\n";
+  request += "Host: " + String(host) + "\r\n";
+  request += "Content-Type: application/json\r\n";
+  request += "Content-Length: " + String(json.length()) + "\r\n";
+  request += "Connection: close\r\n\r\n";
+  request += json;
+
+  client.print(request);
+
+  unsigned long responseStart = millis();
+
+  while (millis() - responseStart < 3000) {
+    if (client.available()) {
+      String statusLine = client.readStringUntil('\n');
+      if (statusLine.indexOf("200") > 0) {
+        break;
+      }
+      break;
+    }
+    delay(10);
+  }
+
+  client.stop();
+}
