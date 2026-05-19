@@ -5,13 +5,13 @@ import { getDatabase, ref, onValue, set, update, remove, Unsubscribe, get, push 
 import { FirebaseData, Medicine, SyncCommand } from '../types';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDSwvmOYIJvi1yGUsptwjseRJlenYLJGzo",
-  authDomain: "meditrack-24ee5.firebaseapp.com",
-  databaseURL: "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "meditrack-24ee5",
-  storageBucket: "meditrack-24ee5.appspot.com",
-  messagingSenderId: "1044793149591",
-  appId: "1:1044793149591:web:baceccc719e4dce0eb81d2"
+  apiKey: "**",
+  authDomain: "**",
+  databaseURL: "**",
+  projectId: "**",
+  storageBucket: "**",
+  messagingSenderId: "**",
+  appId: "**"
 };
 
 export const app = initializeApp(firebaseConfig);
