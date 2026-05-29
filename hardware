@@ -295,6 +295,7 @@ void loop() {
   if (currentMillis - lastDispenseCheck >= 5000) {
     checkDispenseCommand();
     lastDispenseCheck = currentMillis;
+    
   }
   if (currentMillis - lastRestartCheck >= 5000) {
     checkRestartCommand();
@@ -514,6 +515,8 @@ void checkDispenseCommand() {
         if (!medicines[medIdx].schedules[schedIdx].dispensed) {
           medicines[medIdx].schedules[schedIdx].dispensed = true;
           enqueueDispense(medIdx, schedIdx, "manual");
+          delay(2000); 
+          clearDispenseCommand();
         } else {
           lcdPrint("Already Queued", medicines[medIdx].name.substring(0, 13), 1500);
         }

@@ -45,7 +45,7 @@ interface DashboardProps {
   loadMedicines: () => Promise<void>;
   addAlert: (
     type: "missed" | "connection" | "dispensed" | "taken",
-    message: string
+    message: string,
   ) => Promise<void>;
 }
 
@@ -64,17 +64,17 @@ function Dashboard({
     "success" | "warning" | "error"
   >("success");
   const [dispensingSchedule, setDispensingSchedule] = useState<string | null>(
-    null
+    null,
   );
 
   // Convert medicines object to array for easier iteration
   const medicinesArray = Object.values(medicines).filter(
-    (m): m is Medicine => m !== null
+    (m): m is Medicine => m !== null,
   );
 
   const handleScheduleToggle = async (
     medicineId: string,
-    scheduleId: string
+    scheduleId: string,
   ) => {
     const medicine = medicinesArray.find((m) => m.id === medicineId);
     if (!medicine) return;
@@ -98,10 +98,11 @@ function Dashboard({
           timestamp,
         });
 
+        // Call our secure backend Cloud Function instead of the raw database
         const response = await fetch(
-          "https://meditrack-24ee5-default-rtdb.asia-southeast1.firebasedatabase.app/dispense_command.json",
+          `${import.meta.env.VITE_API_BASE_URL}/triggerDispense`,
           {
-            method: "PUT",
+            method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
@@ -110,9 +111,8 @@ function Dashboard({
               medicineId: medicineId,
               scheduleId: scheduleId,
               scheduledTime: schedule.time,
-              timestamp: timestamp,
             }),
-          }
+          },
         );
 
         if (!response.ok) {
@@ -122,7 +122,7 @@ function Dashboard({
         console.log("✅ Dispense command sent successfully");
 
         setNotification(
-          `💊 Dispense command sent for ${medicine.name} (${schedule.time}). Arduino is processing...`
+          `💊 Dispense command sent for ${medicine.name} (${schedule.time}). Arduino is processing...`,
         );
         setNotificationType("success");
         setTimeout(() => {
@@ -155,7 +155,7 @@ function Dashboard({
       setMedicines((prev) => {
         const updated = { ...prev };
         const slotKey = Object.keys(prev).find(
-          (key) => prev[key]?.id === medicineId
+          (key) => prev[key]?.id === medicineId,
         );
         if (slotKey && updated[slotKey]) {
           updated[slotKey] = {
@@ -180,8 +180,8 @@ function Dashboard({
         "taken",
         `${medicine.name} (${schedule.time}) taken at ${currentTime.substring(
           0,
-          5
-        )}`
+          5,
+        )}`,
       );
 
       setNotification(`✓ ${medicine.name} (${schedule.time}) marked as taken`);
@@ -207,7 +207,7 @@ function Dashboard({
               datetime: new Date().toLocaleString(),
               timestamp: timestamp,
             }),
-          }
+          },
         );
       } catch (error) {
         console.error("Error updating Firebase:", error);
@@ -219,7 +219,7 @@ function Dashboard({
       setMedicines((prev) => {
         const updated = { ...prev };
         const slotKey = Object.keys(prev).find(
-          (key) => prev[key]?.id === medicineId
+          (key) => prev[key]?.id === medicineId,
         );
         if (slotKey && updated[slotKey]) {
           updated[slotKey] = {
@@ -508,10 +508,10 @@ function Dashboard({
                           schedule.alert
                             ? "border-rose-200 bg-rose-50"
                             : schedule.taken
-                            ? "border-teal-200 bg-teal-50"
-                            : schedule.dispensed
-                            ? "border-amber-200 bg-amber-50"
-                            : "border-gray-100 bg-gray-50"
+                              ? "border-teal-200 bg-teal-50"
+                              : schedule.dispensed
+                                ? "border-amber-200 bg-amber-50"
+                                : "border-gray-100 bg-gray-50"
                         }`}
                       >
                         <div className="flex items-center space-x-3">
@@ -520,10 +520,10 @@ function Dashboard({
                               schedule.alert
                                 ? "text-rose-600"
                                 : schedule.taken
-                                ? "text-teal-600"
-                                : schedule.dispensed
-                                ? "text-amber-600"
-                                : "text-gray-400"
+                                  ? "text-teal-600"
+                                  : schedule.dispensed
+                                    ? "text-amber-600"
+                                    : "text-gray-400"
                             }`}
                           />
                           <div>
@@ -561,10 +561,10 @@ function Dashboard({
                             schedule.alert
                               ? "bg-rose-500 text-white hover:bg-rose-600"
                               : schedule.taken
-                              ? "bg-teal-500 text-white hover:bg-teal-600"
-                              : schedule.dispensed
-                              ? "bg-amber-500 text-white hover:bg-amber-600"
-                              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                                ? "bg-teal-500 text-white hover:bg-teal-600"
+                                : schedule.dispensed
+                                  ? "bg-amber-500 text-white hover:bg-amber-600"
+                                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
                           } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           {isDispensing && (
@@ -574,12 +574,12 @@ function Dashboard({
                             {schedule.alert
                               ? "Alert"
                               : schedule.taken
-                              ? "Taken"
-                              : schedule.dispensed
-                              ? isDispensing
-                                ? "Dispensing..."
-                                : "Mark Taken"
-                              : "Dispense"}
+                                ? "Taken"
+                                : schedule.dispensed
+                                  ? isDispensing
+                                    ? "Dispensing..."
+                                    : "Mark Taken"
+                                  : "Dispense"}
                           </span>
                         </button>
                       </div>
