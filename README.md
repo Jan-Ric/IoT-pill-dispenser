@@ -1,5 +1,7 @@
 MediTrack - Automated Medicine Pill Dispenser System
+
 OVERVIEW
+
 MediTrack is a production-grade IoT medication management system that combines Arduino hardware with a secure Firebase serverless backend to ensure timely medicine intake and improve patient adherence. The system automatically dispenses medications at scheduled times, monitors intake using ultrasonic sensors, and provides real-time alerts and AI-driven insights to caregivers.
 
 SYSTEM OBJECTIVE
@@ -50,6 +52,7 @@ NTP Time Synchronization (Asia/Manila)
 WiFi Communication (802.11)
 
 SOFTWARE ARCHITECTURE (MONOREPO)
+
 The project follows a modern, decoupled monorepo architecture, ensuring strict security boundaries between the user interface and hardware commands.
 
 /client (Web Dashboard): A stateless React application that reads live data from Firebase. It does not communicate directly with the hardware; instead, it securely triggers serverless functions via HTTP requests.
@@ -78,6 +81,7 @@ AI Caregiver Insights (In Development): Emails will soon be enriched via an AI C
 Real-time Dashboard Updates: The web dashboard displays live status updates, showing which medicines have been dispensed, taken, or missed via color-coded indicators.
 
 SETUP AND INSTALLATION
+
 1. Hardware Setup
 Connect 6x SG90 servo motors to PCA9685 board (channels 0-5).
 
@@ -123,7 +127,9 @@ Start the development server:
 
 Bash
 npm run dev
+
 KEY FEATURES
+
 Hardware Task Queueing: Intelligent C++ queue system prevents simultaneous servo movements and power supply crashes.
 
 Non-Contact Intake Detection: Ultrasonic verification prevents false positives.
@@ -135,6 +141,7 @@ AI-Enhanced Reporting: Automated HTML email reports with upcoming AI-driven care
 Excel Export Data: Full history export via SheetJS for medical record keeping.
 
 HARDWARE CONSTRAINTS
+
 Hardware Capacity: The physical dispenser design is limited to a maximum of 3 distinct medicines (controlled via 6 dedicated servo channels).
 
 Monitoring Timeout: The ultrasonic sensor utilizes a strict 1-minute monitoring window. If the medicine is not removed within this timeframe, the system flags it as a missed dose.
@@ -144,6 +151,7 @@ Network Dependency: The Arduino hardware requires a constant 2.4GHz WiFi connect
 Time Synchronization: The hardware heavily relies on continuous NTP (Network Time Protocol) server synchronization to match physical dispensing with cloud schedules.
 
 ARCHITECTURAL DECISIONS
+
 Stateless Frontend (Cloud-First): The React client intentionally bypasses local browser storage (Local/Session Storage). Firebase Realtime Database acts as the absolute single source of truth. This ensures real-time cross-device synchronization and prevents sensitive medication schedules from being exposed in a user's local browser cache.
 
 Secret Manager over .env files: Backend API keys are stored in Google Cloud's encrypted Secret Manager rather than plain-text environment variables, significantly elevating the security of the application.
