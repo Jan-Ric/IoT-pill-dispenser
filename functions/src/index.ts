@@ -1,14 +1,18 @@
-import {onSchedule} from "firebase-functions/v2/scheduler";
-import {onValueUpdated} from "firebase-functions/v2/database";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onValueUpdated } from "firebase-functions/v2/database";
+import { onRequest } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
 import sgMail from "@sendgrid/mail";
 
 admin.initializeApp();
 
 // Get environment variables
+
 const SENDGRID_KEY = process.env.SENDGRID_KEY || "";
 const CAREGIVER_EMAIL = process.env.CAREGIVER_EMAIL || "";
-const FROM_EMAIL = "sean.vidanes22@gmail.com";
+const FROM_EMAIL = process.env.FROM_EMAIL || "";
+
+// ... the rest of your helper functions stay exactly the same down below ...
 
 // ✅ FIXED: Helper function to convert medicineId to slotId
 function getSlotIdFromMedicineId(medicineId: string): string {
@@ -521,13 +525,19 @@ function getDailySummaryEmailHTML(
   `;
 }
 
-// ✅ IMPROVED: Cloud Function with better logging and medicine data fetching
+const { defineSecret } = require("firebase-functions/params");
+const SENDGRID_KEY_SECRET = defineSecret("SENDGRID_KEY");
+const CAREGIVER_EMAIL_SECRET = defineSecret("CAREGIVER_EMAIL");
+const FROM_EMAIL_SECRET = defineSecret("FROM_EMAIL");
+
 export const onMedicineUpdate = onValueUpdated(
   {
     ref: "/medicine_updates",
     region: "asia-southeast1",
+    secrets: [SENDGRID_KEY_SECRET, CAREGIVER_EMAIL_SECRET, FROM_EMAIL_SECRET]
   },
   async (event) => {
+    const SENDGRID_KEY = SENDGRID_KEY_SECRET.value();
     const newData = event.data.after.val();
     const oldData = event.data.before.val();
 
@@ -770,6 +780,45 @@ export const sendDailySummary = onSchedule(
           body: sgError.response?.body,
         });
       }
+    }
+  }
+);
+
+// ✅ NEW: Secure HTTP Endpoint to trigger the Arduino dispenser
+export const triggerDispense = onRequest(
+  async (req, res) => {
+    // 1. Only allow POST requests
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+
+    try {
+      const { medicineId, scheduleId, servoIndex, scheduledTime } = req.body;
+
+      // 2. Validate the payload
+      if (!medicineId || !scheduleId || servoIndex === undefined) {
+        res.status(400).json({ error: "Missing required fields" });
+        return;
+      }
+
+      const timestamp = Math.floor(Date.now() / 1000);
+      const db = admin.database();
+      
+      // 3. Securely write the command to the Realtime Database for the Arduino
+      await db.ref("dispense_command").set({
+        medicineId,
+        scheduleId,
+        servoIndex: String(servoIndex),
+        scheduledTime,
+        timestamp,
+      });
+
+      console.log(`✅ Dispense command securely issued for ${medicineId}`);
+      res.status(200).json({ message: "Dispense command issued successfully" });
+    } catch (error) {
+      console.error("❌ Error issuing dispense command:", error);
+      res.status(500).json({ error: "Internal server error" });
     }
   }
 );
