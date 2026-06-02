@@ -1,4 +1,4 @@
-# MediTrack - Automated Medicine Pill Dispenser System - [MediTrack](https://iot-pill-dispenser.vercel.app/)
+# [MediTrack](https://iot-pill-dispenser.vercel.app/) - Automated Medicine Pill Dispenser System
 
 ## OVERVIEW
 
